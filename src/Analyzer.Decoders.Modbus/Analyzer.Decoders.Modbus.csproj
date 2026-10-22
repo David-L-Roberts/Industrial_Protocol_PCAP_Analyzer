@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Analyzer.Decoders.Modbus</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Analyzer.Core\Analyzer.Core.csproj" />
+  </ItemGroup>
+
+</Project>
+

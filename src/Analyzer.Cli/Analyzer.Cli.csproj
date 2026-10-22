@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Analyzer.Cli</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Analyzer.Core\Analyzer.Core.csproj" />
+    <ProjectReference Include="..\Analyzer.Decoders.Modbus\Analyzer.Decoders.Modbus.csproj" />
+    <ProjectReference Include="..\Analyzer.Decoders.Dnp3\Analyzer.Decoders.Dnp3.csproj" />
+    <ProjectReference Include="..\Analyzer.Infrastructure\Analyzer.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>
+

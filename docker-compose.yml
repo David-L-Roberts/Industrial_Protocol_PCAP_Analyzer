@@ -1,0 +1,54 @@
+services:
+  timescaledb:
+    image: timescale/timescaledb-ha:pg16
+    container_name: protocol_analyzer_timescaledb
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: analyzer
+      POSTGRES_PASSWORD: analyzer_dev_password
+      POSTGRES_DB: protocol_analyzer
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb_data:/home/postgres/pgdata/data
+      - ./sql/001_init_timescaledb.sql:/docker-entrypoint-initdb.d/001_init_timescaledb.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U analyzer -d protocol_analyzer"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: protocol_analyzer_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin_dev_password
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: protocol_analyzer_grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin_dev_password
+    ports:
+      - "3000:3000"
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+volumes:
+  timescaledb_data:
+  minio_data:
+  grafana_data:
+
