@@ -41,6 +41,14 @@ public record TagDefinition(
     public double ComputeScaledValue(double unscaledValue) => (unscaledValue * ScaleMultiplier) + ScaleOffset;
 }
 
+public record TagInitialState(
+    Guid TagId,
+    double? InitialUnscaledNumericValue,
+    double? InitialScaledNumericValue,
+    bool? InitialBooleanValue,
+    string InitialRawHex
+);
+
 public record DissectedFrame(
     long FrameNumber,
     DateTime TimestampUtc,

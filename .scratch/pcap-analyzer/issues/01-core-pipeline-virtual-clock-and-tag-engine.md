@@ -4,12 +4,12 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Matches incoming Dissected Frames to configured Device Endpoint Pairs and determines `ClientToServer` vs. `ServerToClient` Traffic Direction (ignoring unmatched frames).
-- [ ] Evaluates pending request expiration strictly using `DissectedFrame.TimestampUtc` against the session's `TimeoutThresholdMs`, emitting `TIMEOUT` RED Transaction records when exceeded.
-- [ ] Correlates `ServerToClient` responses with pending `ClientToServer` requests to calculate `DurationMs` and emit `SUCCESS` or `EXCEPTION` RED Transaction records.
-- [ ] Flushes all remaining unanswered requests at the end of the frame stream as `TIMEOUT_AT_EOF` RED Transaction records.
-- [ ] Resolves protocol addresses to mapped Tag Definitions, applies linear scaling (`(unscaled * ScaleMultiplier) + ScaleOffset`), sets `IsValueChange = true` when scaled value, boolean value, or quality flags change, and captures $T_0$ Initial State on first observation per tag.
-- [ ] Verified by unit tests using synthetic Dissected Frame streams with zero external binary or database dependencies.
+- [x] Matches incoming Dissected Frames to configured Device Endpoint Pairs and determines `ClientToServer` vs. `ServerToClient` Traffic Direction (ignoring unmatched frames).
+- [x] Evaluates pending request expiration strictly using `DissectedFrame.TimestampUtc` against the session's `TimeoutThresholdMs`, emitting `TIMEOUT` RED Transaction records when exceeded.
+- [x] Correlates `ServerToClient` responses with pending `ClientToServer` requests to calculate `DurationMs` and emit `SUCCESS` or `EXCEPTION` RED Transaction records.
+- [x] Flushes all remaining unanswered requests at the end of the frame stream as `TIMEOUT_AT_EOF` RED Transaction records.
+- [x] Resolves protocol addresses to mapped Tag Definitions, applies linear scaling (`(unscaled * ScaleMultiplier) + ScaleOffset`), sets `IsValueChange = true` when scaled value, boolean value, or quality flags change, and captures $T_0$ Initial State on first observation per tag.
+- [x] Verified by unit tests using synthetic Dissected Frame streams with zero external binary or database dependencies.
 
