@@ -4,11 +4,11 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Parses session manifest JSON into a `TestSession` and its associated `DeviceEndpointPair` collection, including timeout threshold, unmapped register flag, client/server IPs, protocol address IDs, and tag CSV references.
-- [ ] Parses tag mapping CSV files (`Protocol,Address,TagName,DataType,ScaleMultiplier,ScaleOffset,Units,Description`) into `TagDefinition` records scoped to their `DeviceEndpointPair`.
-- [ ] Deserializes `tshark -T ek` NDJSON lines into `DissectedFrame` records asynchronously (`IAsyncEnumerable<DissectedFrame>`), extracting packet UTC timestamps, IP/TCP endpoints, and hex-decoded raw application payloads.
-- [ ] Configures `tshark` process invocation with `-r <file> -T ek -j "modbus dnp3 tcp ip" -o tcp.desegment_tcp_streams:TRUE` while allowing direct stream injection for unit tests.
-- [ ] Verified by unit tests against static JSON, CSV, and NDJSON fixtures without invoking the `tshark` binary.
+- [x] Parses session manifest JSON into a `TestSession` and its associated `DeviceEndpointPair` collection, including timeout threshold, unmapped register flag, client/server IPs, protocol address IDs, and tag CSV references.
+- [x] Parses tag mapping CSV files (`Protocol,Address,TagName,DataType,ScaleMultiplier,ScaleOffset,Units,Description`) into `TagDefinition` records scoped to their `DeviceEndpointPair`.
+- [x] Deserializes `tshark -T ek` NDJSON lines into `DissectedFrame` records asynchronously (`IAsyncEnumerable<DissectedFrame>`), extracting packet UTC timestamps, IP/TCP endpoints, and hex-decoded raw application payloads.
+- [x] Configures `tshark` process invocation with `-r <file> -T ek -j "modbus dnp3 tcp ip" -o tcp.desegment_tcp_streams:TRUE` while allowing direct stream injection for unit tests.
+- [x] Verified by unit tests against static JSON, CSV, and NDJSON fixtures without invoking the `tshark` binary.
 
