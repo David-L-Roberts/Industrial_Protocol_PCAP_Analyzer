@@ -6,6 +6,55 @@ public enum TrafficDirection
     ServerToClient
 }
 
+public enum ProtocolType
+{
+    ModbusTcp,
+    Dnp3
+}
+
+public enum TagDataType
+{
+    Bool,
+    Int16,
+    UInt16,
+    Int32,
+    Float32Be,
+    Float32Swapped
+}
+
+public enum TransactionErrorType
+{
+    None,
+    Timeout,
+    TimeoutAtEof,
+    Exception,
+    Malformed
+}
+
+public enum TransactionStatusCode
+{
+    Success,
+    Timeout,
+    TimeoutAtEof,
+    Malformed,
+    ModbusEx01,
+    ModbusEx02,
+    ModbusEx03,
+    ModbusEx04,
+    ModbusEx05,
+    ModbusEx06,
+    ModbusEx08,
+    ModbusEx0A,
+    ModbusEx0B,
+    ModbusExceptionUnknown,
+    Dnp3IinFuncNotSupported,
+    Dnp3IinObjectUnknown,
+    Dnp3IinParamErr,
+    Dnp3IinEventBufferOverflow,
+    Dnp3IinAlreadyExecuting,
+    Dnp3IinConfigCorrupt
+}
+
 public record TestSession(
     Guid Id,
     string Name,
@@ -19,7 +68,7 @@ public record DeviceEndpointPair(
     Guid Id,
     Guid SessionId,
     string Name,
-    string Protocol,
+    ProtocolType Protocol,
     string ClientIp,
     string ServerIp,
     int? ClientProtocolAddressId,
@@ -31,7 +80,7 @@ public record TagDefinition(
     Guid DevicePairId,
     string TagName,
     string ProtocolAddress,
-    string DataType,
+    TagDataType DataType,
     double ScaleMultiplier,
     double ScaleOffset,
     string? EngineeringUnits,
@@ -56,7 +105,7 @@ public record DissectedFrame(
     int SourcePort,
     string DestIp,
     int DestPort,
-    string ProtocolName,
+    ProtocolType ProtocolName,
     byte[] RawApplicationPayload,
     IReadOnlyDictionary<string, string>? DissectedFields = null
 );
@@ -71,8 +120,8 @@ public record ProtocolTransactionRecord(
     short FunctionCode,
     double? DurationMs,
     bool IsError,
-    string ErrorType,
-    string StatusCode
+    TransactionErrorType ErrorType,
+    TransactionStatusCode StatusCode
 );
 
 public record ExtractedDataPointRecord(
@@ -126,4 +175,3 @@ public record ProtocolDecodeOutput(
     IReadOnlyList<CapturedCommandEventRecord> CommandEvents,
     IReadOnlyList<ModbusUnmappedRecord> UnmappedRegisters
 );
-

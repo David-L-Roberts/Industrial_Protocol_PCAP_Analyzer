@@ -30,6 +30,8 @@ This application ingests Wireshark PCAP/PCAPNG captures of industrial network tr
 5. **Cross-Platform Target:**
    - Target **.NET 8.0 (or .NET 9.0)** in C#. Code must compile and run identically on **Windows (`win-x64`)** and **Linux (`linux-x64`)**.
    - Must support deployment via **Docker Compose** and as a **Standalone Single-File Executable** (`PublishSingleFile=true`).
+6. **Strong Domain Typing (Enums & Value Objects over Free-Form Primitives):**
+   - Model finite sets of values (e.g., protocol identifiers, tag data types, error classifications, transaction status codes) using C# `enum` types or strongly typed value objects rather than free-form `string` or unconstrained primitive fields. Parse external strings into strong domain types at the ingestion/configuration seam and serialize to wire/database strings only at the persistence seam.
 
 ---
 
@@ -242,11 +244,60 @@ public enum TrafficDirection
     ServerToClient
 }
 
+public enum ProtocolType
+{
+    ModbusTcp,
+    Dnp3
+}
+
+public enum TagDataType
+{
+    Bool,
+    Int16,
+    UInt16,
+    Int32,
+    Float32Be,
+    Float32Swapped
+}
+
+public enum TransactionErrorType
+{
+    None,
+    Timeout,
+    TimeoutAtEof,
+    Exception,
+    Malformed
+}
+
+public enum TransactionStatusCode
+{
+    Success,
+    Timeout,
+    TimeoutAtEof,
+    Malformed,
+    ModbusEx01,
+    ModbusEx02,
+    ModbusEx03,
+    ModbusEx04,
+    ModbusEx05,
+    ModbusEx06,
+    ModbusEx08,
+    ModbusEx0A,
+    ModbusEx0B,
+    ModbusExceptionUnknown,
+    Dnp3IinFuncNotSupported,
+    Dnp3IinObjectUnknown,
+    Dnp3IinParamErr,
+    Dnp3IinEventBufferOverflow,
+    Dnp3IinAlreadyExecuting,
+    Dnp3IinConfigCorrupt
+}
+
 public record DeviceEndpointPair(
     Guid Id,
     Guid SessionId,
     string Name,
-    string Protocol,
+    ProtocolType Protocol,
     string ClientIp,
     string ServerIp,
     int? ClientProtocolAddressId,
@@ -258,7 +309,7 @@ public record TagDefinition(
     Guid DevicePairId,
     string TagName,
     string ProtocolAddress,
-    string DataType,
+    TagDataType DataType,
     double ScaleMultiplier,
     double ScaleOffset,
     string? EngineeringUnits,
@@ -275,7 +326,7 @@ public record DissectedFrame(
     int SourcePort,
     string DestIp,
     int DestPort,
-    string ProtocolName,
+    ProtocolType ProtocolName,
     byte[] RawApplicationPayload,
     IReadOnlyDictionary<string, string>? DissectedFields = null
 );
@@ -290,8 +341,8 @@ public record ProtocolTransactionRecord(
     short FunctionCode,
     double? DurationMs,
     bool IsError,
-    string ErrorType,
-    string StatusCode
+    TransactionErrorType ErrorType,
+    TransactionStatusCode StatusCode
 );
 
 public record ExtractedDataPointRecord(
@@ -359,7 +410,7 @@ public interface IFrameSource
 
 public interface IProtocolDecoder
 {
-    string Protocol { get; }
+    ProtocolType Protocol { get; }
     ProtocolDecodeOutput ProcessFrame(
         DissectedFrame frame,
         DeviceEndpointPair pair,

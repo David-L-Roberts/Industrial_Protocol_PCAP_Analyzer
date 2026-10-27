@@ -9,7 +9,7 @@ public interface IFrameSource
 
 public interface IProtocolDecoder
 {
-    string Protocol { get; }
+    ProtocolType Protocol { get; }
     ProtocolDecodeOutput ProcessFrame(
         DissectedFrame frame,
         DeviceEndpointPair pair,
@@ -37,4 +37,3 @@ public interface IDataSink
     Task UpdateTagInitialStatesAsync(Guid sessionId, CancellationToken ct);
     Task CompleteSessionAsync(Guid sessionId, string status, CancellationToken ct);
 }
-

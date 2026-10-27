@@ -15,6 +15,8 @@ Master engineering specification is stored in [`SPECIFICATION.md`](./SPECIFICATI
    - Never use `DateTime.Now` or `DateTime.UtcNow` when evaluating packet timeouts or transaction durations. All timing calculations must be driven exclusively by `DissectedFrame.TimestampUtc`.
 5. **Cross-Platform Target:**
    - Target **.NET 8.0 (`net8.0`)** in C#. Code must compile with zero warnings (`TreatWarningsAsErrors=true`) and run identically on Windows (`win-x64`) and Linux (`linux-x64`).
+6. **Strong Domain Typing (Enums & Value Objects over Free-Form Primitives):**
+   - Model finite sets of values (e.g., protocol identifiers, tag data types, error classifications, transaction status codes) using C# `enum` types or strongly typed value objects rather than free-form `string` or unconstrained primitive fields. Parse external strings into strong domain types at the ingestion/configuration seam and serialize to wire/database strings only at the persistence seam.
 
 ## Build & Verification Commands
 

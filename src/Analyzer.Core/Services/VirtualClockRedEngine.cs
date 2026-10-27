@@ -66,7 +66,7 @@ public class VirtualClockRedEngine
         DateTime responseTimestampUtc,
         short responseFunctionCode,
         bool isException,
-        string statusCode,
+        TransactionStatusCode statusCode,
         [NotNullWhen(true)] out ProtocolTransactionRecord? transaction,
         out TContext? requestContext)
     {
@@ -91,7 +91,7 @@ public class VirtualClockRedEngine
             FunctionCode: responseFunctionCode,
             DurationMs: durationMs,
             IsError: isException,
-            ErrorType: isException ? "EXCEPTION" : "NONE",
+            ErrorType: isException ? TransactionErrorType.Exception : TransactionErrorType.None,
             StatusCode: statusCode);
 
         return true;
@@ -104,7 +104,7 @@ public class VirtualClockRedEngine
         DateTime responseTimestampUtc,
         short responseFunctionCode,
         bool isException,
-        string statusCode,
+        TransactionStatusCode statusCode,
         [NotNullWhen(true)] out ProtocolTransactionRecord? transaction) =>
         TryCompleteResponse<object>(
             devicePairId,
@@ -141,8 +141,10 @@ public class VirtualClockRedEngine
             _priorityQueue.Dequeue();
             _pendingByKey.Remove(key);
 
-            var errorType = elapsedMs > _timeoutThresholdMs ? "TIMEOUT" : "TIMEOUT_AT_EOF";
-            var durationMs = errorType == "TIMEOUT" ? _timeoutThresholdMs : Math.Max(0.0, elapsedMs);
+            bool isMidStreamTimeout = elapsedMs > _timeoutThresholdMs;
+            var errorType = isMidStreamTimeout ? TransactionErrorType.Timeout : TransactionErrorType.TimeoutAtEof;
+            var statusCode = isMidStreamTimeout ? TransactionStatusCode.Timeout : TransactionStatusCode.TimeoutAtEof;
+            var durationMs = isMidStreamTimeout ? _timeoutThresholdMs : Math.Max(0.0, elapsedMs);
 
             results.Add(new ProtocolTransactionRecord(
                 Timestamp: candidate.TimestampUtc,
@@ -155,7 +157,7 @@ public class VirtualClockRedEngine
                 DurationMs: durationMs,
                 IsError: true,
                 ErrorType: errorType,
-                StatusCode: errorType));
+                StatusCode: statusCode));
         }
 
         return results;

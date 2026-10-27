@@ -30,7 +30,7 @@ public class VirtualClockRedEngineTests
             responseTimestampUtc: t0.AddMilliseconds(45.5),
             responseFunctionCode: 3,
             isException: false,
-            statusCode: "SUCCESS",
+            statusCode: TransactionStatusCode.Success,
             out var okTx,
             out var context);
 
@@ -46,12 +46,12 @@ public class VirtualClockRedEngineTests
         Assert.Equal(3, okTx.FunctionCode);
         Assert.Equal(45.5, okTx.DurationMs!.Value, precision: 5);
         Assert.False(okTx.IsError);
-        Assert.Equal("NONE", okTx.ErrorType);
-        Assert.Equal("SUCCESS", okTx.StatusCode);
+        Assert.Equal(TransactionErrorType.None, okTx.ErrorType);
+        Assert.Equal(TransactionStatusCode.Success, okTx.StatusCode);
 
         // Duplicate response for already-completed request returns false
         Assert.False(engine.TryCompleteResponse<string>(
-            pairId, "TX-001", 12, t0.AddMilliseconds(50), 3, false, "SUCCESS", out _, out _));
+            pairId, "TX-001", 12, t0.AddMilliseconds(50), 3, false, TransactionStatusCode.Success, out _, out _));
 
         // 2. Register request that receives a protocol exception response
         engine.RegisterRequest(
@@ -69,7 +69,7 @@ public class VirtualClockRedEngineTests
             responseTimestampUtc: t0.AddMilliseconds(112.25),
             responseFunctionCode: 0x83,
             isException: true,
-            statusCode: "MODBUS_EX_02",
+            statusCode: TransactionStatusCode.ModbusEx02,
             out var exTx,
             out _);
 
@@ -77,8 +77,8 @@ public class VirtualClockRedEngineTests
         Assert.NotNull(exTx);
         Assert.Equal(12.25, exTx.DurationMs!.Value, precision: 5);
         Assert.True(exTx.IsError);
-        Assert.Equal("EXCEPTION", exTx.ErrorType);
-        Assert.Equal("MODBUS_EX_02", exTx.StatusCode);
+        Assert.Equal(TransactionErrorType.Exception, exTx.ErrorType);
+        Assert.Equal(TransactionStatusCode.ModbusEx02, exTx.StatusCode);
     }
 
     [Fact]
@@ -97,7 +97,7 @@ public class VirtualClockRedEngineTests
         engine.RegisterRequest(sessionId, pairId, frameNumber: 3, timestampUtc: t0.AddMilliseconds(1000), transactionId: "TX-3", functionCode: 4);
 
         // Complete TX-2 at T + 600ms
-        Assert.True(engine.TryCompleteResponse(pairId, "TX-2", 4, t0.AddMilliseconds(600), 3, false, "SUCCESS", out _));
+        Assert.True(engine.TryCompleteResponse(pairId, "TX-2", 4, t0.AddMilliseconds(600), 3, false, TransactionStatusCode.Success, out _));
 
         // At exact threshold T + 1500ms, TX-1 is NOT yet > 1500ms
         Assert.Empty(engine.FlushExpiredTimeouts(t0.AddMilliseconds(1500), isEndOfFile: false));
@@ -114,11 +114,11 @@ public class VirtualClockRedEngineTests
         Assert.Equal(3, timeoutRec.FunctionCode);
         Assert.Equal(1500.0, timeoutRec.DurationMs!.Value, precision: 5);
         Assert.True(timeoutRec.IsError);
-        Assert.Equal("TIMEOUT", timeoutRec.ErrorType);
-        Assert.Equal("TIMEOUT", timeoutRec.StatusCode);
+        Assert.Equal(TransactionErrorType.Timeout, timeoutRec.ErrorType);
+        Assert.Equal(TransactionStatusCode.Timeout, timeoutRec.StatusCode);
 
         // Late response for already timed-out TX-1 is ignored
-        Assert.False(engine.TryCompleteResponse(pairId, "TX-1", 5, t0.AddMilliseconds(1700), 3, false, "SUCCESS", out _));
+        Assert.False(engine.TryCompleteResponse(pairId, "TX-1", 5, t0.AddMilliseconds(1700), 3, false, TransactionStatusCode.Success, out _));
 
         // At EOF (T + 2000ms), remaining unanswered TX-3 is flushed as TIMEOUT_AT_EOF
         var eofTimeouts = engine.FlushExpiredTimeouts(t0.AddMilliseconds(2000), isEndOfFile: true);
@@ -130,11 +130,10 @@ public class VirtualClockRedEngineTests
         Assert.Equal(4, eofRec.FunctionCode);
         Assert.Equal(1000.0, eofRec.DurationMs!.Value, precision: 5);
         Assert.True(eofRec.IsError);
-        Assert.Equal("TIMEOUT_AT_EOF", eofRec.ErrorType);
-        Assert.Equal("TIMEOUT_AT_EOF", eofRec.StatusCode);
+        Assert.Equal(TransactionErrorType.TimeoutAtEof, eofRec.ErrorType);
+        Assert.Equal(TransactionStatusCode.TimeoutAtEof, eofRec.StatusCode);
 
         // Subsequent flush is empty
         Assert.Empty(engine.FlushExpiredTimeouts(t0.AddMilliseconds(3000), isEndOfFile: true));
     }
 }
-

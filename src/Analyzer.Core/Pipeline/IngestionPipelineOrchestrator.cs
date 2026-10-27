@@ -9,7 +9,7 @@ public class IngestionPipelineOrchestrator
     public const int DefaultBatchSize = 5000;
 
     private readonly IFrameSource _frameSource;
-    private readonly Dictionary<string, IProtocolDecoder> _decodersByProtocol;
+    private readonly Dictionary<ProtocolType, IProtocolDecoder> _decodersByProtocol;
     private readonly IDataSink _dataSink;
     private readonly int _batchSize;
 
@@ -30,11 +30,11 @@ public class IngestionPipelineOrchestrator
         _frameSource = frameSource;
         _dataSink = dataSink;
         _batchSize = batchSize;
-        _decodersByProtocol = new Dictionary<string, IProtocolDecoder>(StringComparer.OrdinalIgnoreCase);
+        _decodersByProtocol = new Dictionary<ProtocolType, IProtocolDecoder>();
 
         foreach (var decoder in decoders)
         {
-            _decodersByProtocol[NormalizeProtocol(decoder.Protocol)] = decoder;
+            _decodersByProtocol[decoder.Protocol] = decoder;
         }
     }
 
@@ -68,7 +68,7 @@ public class IngestionPipelineOrchestrator
                 continue;
             }
 
-            if (!_decodersByProtocol.TryGetValue(NormalizeProtocol(matchedPair.Protocol), out var decoder))
+            if (!_decodersByProtocol.TryGetValue(matchedPair.Protocol, out var decoder))
             {
                 continue;
             }
@@ -155,11 +155,9 @@ public class IngestionPipelineOrchestrator
         out DeviceEndpointPair matchedPair,
         out TrafficDirection direction)
     {
-        var normalizedFrameProtocol = NormalizeProtocol(frame.ProtocolName);
-
         foreach (var pair in pairs)
         {
-            if (!string.Equals(NormalizeProtocol(pair.Protocol), normalizedFrameProtocol, StringComparison.OrdinalIgnoreCase))
+            if (pair.Protocol != frame.ProtocolName)
             {
                 continue;
             }
@@ -180,7 +178,7 @@ public class IngestionPipelineOrchestrator
                 continue;
             }
 
-            if (!MatchesProtocolAddresses(frame, pair, candidateDirection, normalizedFrameProtocol))
+            if (!MatchesProtocolAddresses(frame, pair, candidateDirection))
             {
                 continue;
             }
@@ -198,10 +196,9 @@ public class IngestionPipelineOrchestrator
     private static bool MatchesProtocolAddresses(
         DissectedFrame frame,
         DeviceEndpointPair pair,
-        TrafficDirection direction,
-        string normalizedProtocol)
+        TrafficDirection direction)
     {
-        TryExtractProtocolAddresses(frame, direction, normalizedProtocol, out var clientAddr, out var serverAddr);
+        TryExtractProtocolAddresses(frame, direction, frame.ProtocolName, out var clientAddr, out var serverAddr);
 
         if (pair.ClientProtocolAddressId.HasValue &&
             pair.ClientProtocolAddressId.Value != clientAddr)
@@ -221,7 +218,7 @@ public class IngestionPipelineOrchestrator
     private static void TryExtractProtocolAddresses(
         DissectedFrame frame,
         TrafficDirection direction,
-        string normalizedProtocol,
+        ProtocolType protocol,
         out int? clientAddress,
         out int? serverAddress)
     {
@@ -253,14 +250,14 @@ public class IngestionPipelineOrchestrator
             return;
         }
 
-        if (string.Equals(normalizedProtocol, "ModbusTCP", StringComparison.OrdinalIgnoreCase))
+        if (protocol == ProtocolType.ModbusTcp)
         {
             if (serverAddress is null && payload.Length >= 7)
             {
                 serverAddress = payload[6];
             }
         }
-        else if (string.Equals(normalizedProtocol, "DNP3", StringComparison.OrdinalIgnoreCase))
+        else if (protocol == ProtocolType.Dnp3)
         {
             if (payload.Length >= 8 && payload[0] == 0x05 && payload[1] == 0x64)
             {
@@ -306,28 +303,4 @@ public class IngestionPipelineOrchestrator
         value = default;
         return false;
     }
-
-    private static string NormalizeProtocol(string protocol)
-    {
-        if (string.IsNullOrWhiteSpace(protocol))
-        {
-            return string.Empty;
-        }
-
-        var trimmed = protocol.Trim();
-        if (trimmed.Equals("modbus", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.Equals("mbtcp", StringComparison.OrdinalIgnoreCase) ||
-            trimmed.Equals("modbustcp", StringComparison.OrdinalIgnoreCase))
-        {
-            return "ModbusTCP";
-        }
-
-        if (trimmed.Equals("dnp3", StringComparison.OrdinalIgnoreCase))
-        {
-            return "DNP3";
-        }
-
-        return trimmed;
-    }
 }
-

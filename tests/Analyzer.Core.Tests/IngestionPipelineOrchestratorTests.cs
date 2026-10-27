@@ -27,7 +27,7 @@ public class IngestionPipelineOrchestratorTests
             Id: pairId,
             SessionId: sessionId,
             Name: "RTAC_to_Relay",
-            Protocol: "ModbusTCP",
+            Protocol: ProtocolType.ModbusTcp,
             ClientIp: "10.0.1.10",
             ServerIp: "10.0.1.20",
             ClientProtocolAddressId: null,
@@ -38,7 +38,7 @@ public class IngestionPipelineOrchestratorTests
             DevicePairId: pairId,
             TagName: "Bus_Volts_A",
             ProtocolAddress: "HR:40001",
-            DataType: "UINT16",
+            DataType: TagDataType.UInt16,
             ScaleMultiplier: 0.1,
             ScaleOffset: 0.0,
             EngineeringUnits: "kV",
@@ -56,7 +56,7 @@ public class IngestionPipelineOrchestratorTests
                 SourcePort: 50000,
                 DestIp: "10.0.1.20",
                 DestPort: 502,
-                ProtocolName: "ModbusTCP",
+                ProtocolName: ProtocolType.ModbusTcp,
                 RawApplicationPayload: [0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03]),
 
             // Frame 2: Matched IPs but wrong Modbus Unit ID (Unit ID 2 != 1) -> should be ignored
@@ -67,7 +67,7 @@ public class IngestionPipelineOrchestratorTests
                 SourcePort: 50001,
                 DestIp: "10.0.1.20",
                 DestPort: 502,
-                ProtocolName: "ModbusTCP",
+                ProtocolName: ProtocolType.ModbusTcp,
                 RawApplicationPayload: [0x00, 0x99, 0x00, 0x00, 0x00, 0x06, 0x02, 0x03]),
 
             // Frame 3: ClientToServer request TX-1 at T + 100ms (will never be answered -> expires mid-stream)
@@ -78,7 +78,7 @@ public class IngestionPipelineOrchestratorTests
                 SourcePort: 50001,
                 DestIp: "10.0.1.20",
                 DestPort: 502,
-                ProtocolName: "ModbusTCP",
+                ProtocolName: ProtocolType.ModbusTcp,
                 RawApplicationPayload: [0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03],
                 DissectedFields: new Dictionary<string, string> { ["tx_id"] = "TX-1", ["fc"] = "3" }),
 
@@ -90,7 +90,7 @@ public class IngestionPipelineOrchestratorTests
                 SourcePort: 50001,
                 DestIp: "10.0.1.20",
                 DestPort: 502,
-                ProtocolName: "ModbusTCP",
+                ProtocolName: ProtocolType.ModbusTcp,
                 RawApplicationPayload: [0x00, 0x02, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03],
                 DissectedFields: new Dictionary<string, string> { ["tx_id"] = "TX-2", ["fc"] = "3" }),
 
@@ -102,7 +102,7 @@ public class IngestionPipelineOrchestratorTests
                 SourcePort: 502,
                 DestIp: "10.0.1.10",
                 DestPort: 50001,
-                ProtocolName: "ModbusTCP",
+                ProtocolName: ProtocolType.ModbusTcp,
                 RawApplicationPayload: [0x00, 0x02, 0x00, 0x00, 0x00, 0x05, 0x01, 0x03, 0x02, 0x05, 0x64],
                 DissectedFields: new Dictionary<string, string>
                 {
@@ -121,7 +121,7 @@ public class IngestionPipelineOrchestratorTests
                 SourcePort: 50001,
                 DestIp: "10.0.1.20",
                 DestPort: 502,
-                ProtocolName: "ModbusTCP",
+                ProtocolName: ProtocolType.ModbusTcp,
                 RawApplicationPayload: [0x00, 0x03, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03],
                 DissectedFields: new Dictionary<string, string> { ["tx_id"] = "TX-3", ["fc"] = "3" })
         };
@@ -150,22 +150,22 @@ public class IngestionPipelineOrchestratorTests
         Assert.Equal("TX-1", tx1.TransactionId);
         Assert.Equal(TrafficDirection.ClientToServer, tx1.Direction);
         Assert.True(tx1.IsError);
-        Assert.Equal("TIMEOUT", tx1.ErrorType);
+        Assert.Equal(TransactionErrorType.Timeout, tx1.ErrorType);
         Assert.Equal(1000.0, tx1.DurationMs!.Value, precision: 5);
 
         var tx2 = dataSink.Transactions[1];
         Assert.Equal("TX-2", tx2.TransactionId);
         Assert.Equal(TrafficDirection.ServerToClient, tx2.Direction);
         Assert.False(tx2.IsError);
-        Assert.Equal("NONE", tx2.ErrorType);
-        Assert.Equal("SUCCESS", tx2.StatusCode);
+        Assert.Equal(TransactionErrorType.None, tx2.ErrorType);
+        Assert.Equal(TransactionStatusCode.Success, tx2.StatusCode);
         Assert.Equal(50.0, tx2.DurationMs!.Value, precision: 5);
 
         var tx3 = dataSink.Transactions[2];
         Assert.Equal("TX-3", tx3.TransactionId);
         Assert.Equal(TrafficDirection.ClientToServer, tx3.Direction);
         Assert.True(tx3.IsError);
-        Assert.Equal("TIMEOUT_AT_EOF", tx3.ErrorType);
+        Assert.Equal(TransactionErrorType.TimeoutAtEof, tx3.ErrorType);
 
         // Verify decoded data point and T0 initial state
         var dp = Assert.Single(dataSink.DataPoints);
@@ -195,7 +195,7 @@ public class IngestionPipelineOrchestratorTests
         VirtualClockRedEngine redEngine,
         TagResolutionEngine tagEngine) : IProtocolDecoder
     {
-        public string Protocol => "ModbusTCP";
+        public ProtocolType Protocol => ProtocolType.ModbusTcp;
 
         public ProtocolDecodeOutput ProcessFrame(
             DissectedFrame frame,
@@ -232,7 +232,7 @@ public class IngestionPipelineOrchestratorTests
                         frame.TimestampUtc,
                         fc,
                         isException: false,
-                        statusCode: "SUCCESS",
+                        statusCode: TransactionStatusCode.Success,
                         out var tx))
                 {
                     transactions.Add(tx);
@@ -311,4 +311,3 @@ public class IngestionPipelineOrchestratorTests
         }
     }
 }
-

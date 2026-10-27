@@ -12,7 +12,7 @@ public class TagDefinitionTests
             DevicePairId: Guid.NewGuid(),
             TagName: "Bus_Volts_A",
             ProtocolAddress: "HR:40001",
-            DataType: "FLOAT32_BE",
+            DataType: TagDataType.Float32Be,
             ScaleMultiplier: 0.1,
             ScaleOffset: 5.0,
             EngineeringUnits: "kV",
@@ -23,4 +23,3 @@ public class TagDefinitionTests
         Assert.Equal(115.0, scaled, precision: 5);
     }
 }
-

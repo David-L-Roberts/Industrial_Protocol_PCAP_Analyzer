@@ -16,7 +16,7 @@ public class TagResolutionEngineTests
             DevicePairId: pairId,
             TagName: "Feeder_MW",
             ProtocolAddress: "G30V02:Idx0",
-            DataType: "INT16",
+            DataType: TagDataType.Int16,
             ScaleMultiplier: 0.01,
             ScaleOffset: 2.5,
             EngineeringUnits: "MW",
@@ -76,7 +76,7 @@ public class TagResolutionEngineTests
             DevicePairId: pairId,
             TagName: "Bus_Volts_A",
             ProtocolAddress: "HR:40001",
-            DataType: "UINT16",
+            DataType: TagDataType.UInt16,
             ScaleMultiplier: 0.1,
             ScaleOffset: 0.0,
             EngineeringUnits: "kV",
@@ -87,7 +87,7 @@ public class TagResolutionEngineTests
             DevicePairId: pairId,
             TagName: "Breaker_52A",
             ProtocolAddress: "COIL:00005",
-            DataType: "BOOL",
+            DataType: TagDataType.Bool,
             ScaleMultiplier: 1.0,
             ScaleOffset: 0.0,
             EngineeringUnits: null,
@@ -153,4 +153,3 @@ public class TagResolutionEngineTests
         Assert.Equal("00", initialStates[boolTagId].InitialRawHex);
     }
 }
-
