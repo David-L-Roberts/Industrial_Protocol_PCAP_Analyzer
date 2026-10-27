@@ -35,5 +35,5 @@ public interface IDataSink
     Task InitializeSessionAsync(TestSession session, IEnumerable<DeviceEndpointPair> pairs, IEnumerable<TagDefinition> tags, CancellationToken ct);
     Task WriteBatchAsync(ProtocolDecodeOutput batch, CancellationToken ct);
     Task UpdateTagInitialStatesAsync(Guid sessionId, CancellationToken ct);
-    Task CompleteSessionAsync(Guid sessionId, string status, CancellationToken ct);
+    Task CompleteSessionAsync(Guid sessionId, SessionStatus status, CancellationToken ct);
 }

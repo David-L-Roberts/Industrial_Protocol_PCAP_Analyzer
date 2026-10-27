@@ -8,16 +8,16 @@ public class TagResolutionEngine
     private readonly record struct CachedTagState(
         double? ScaledNumericValue,
         bool? BooleanValue,
-        string? QualityFlags);
+        PointQualityFlags QualityFlags);
 
-    private readonly Dictionary<(Guid DevicePairId, string ProtocolAddress), TagDefinition> _tagsByKey;
+    private readonly Dictionary<(Guid DevicePairId, ProtocolAddress ProtocolAddress), TagDefinition> _tagsByKey;
     private readonly Dictionary<Guid, CachedTagState> _lastKnownStateCache = new();
     private readonly Dictionary<Guid, TagInitialState> _initialStates = new();
 
     public TagResolutionEngine(IEnumerable<TagDefinition> tags)
     {
         ArgumentNullException.ThrowIfNull(tags);
-        _tagsByKey = new Dictionary<(Guid, string), TagDefinition>();
+        _tagsByKey = new Dictionary<(Guid, ProtocolAddress), TagDefinition>();
         foreach (var tag in tags)
         {
             _tagsByKey[(tag.DevicePairId, tag.ProtocolAddress)] = tag;
@@ -27,7 +27,7 @@ public class TagResolutionEngine
     public bool TryResolveAndProject(
         Guid sessionId,
         Guid devicePairId,
-        string protocolAddress,
+        ProtocolAddress protocolAddress,
         DateTime packetTimestamp,
         DateTime? eventTimestamp,
         long frameNumber,
@@ -35,7 +35,7 @@ public class TagResolutionEngine
         double? unscaledNumericValue,
         bool? booleanValue,
         string rawHex,
-        string? qualityFlags,
+        PointQualityFlags qualityFlags,
         [NotNullWhen(true)] out ExtractedDataPointRecord? dataPoint)
     {
         if (!_tagsByKey.TryGetValue((devicePairId, protocolAddress), out var tag))
@@ -94,5 +94,5 @@ public class TagResolutionEngine
     private static bool AreStatesEqual(CachedTagState a, CachedTagState b) =>
         Nullable.Equals(a.ScaledNumericValue, b.ScaledNumericValue) &&
         a.BooleanValue == b.BooleanValue &&
-        string.Equals(a.QualityFlags, b.QualityFlags, StringComparison.Ordinal);
+        a.QualityFlags == b.QualityFlags;
 }

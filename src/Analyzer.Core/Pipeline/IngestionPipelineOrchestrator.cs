@@ -125,7 +125,7 @@ public class IngestionPipelineOrchestrator
         }
 
         await _dataSink.UpdateTagInitialStatesAsync(session.Id, ct);
-        await _dataSink.CompleteSessionAsync(session.Id, "COMPLETED", ct);
+        await _dataSink.CompleteSessionAsync(session.Id, SessionStatus.Completed, ct);
     }
 
     private async Task FlushBatchAsync(
@@ -163,13 +163,11 @@ public class IngestionPipelineOrchestrator
             }
 
             TrafficDirection candidateDirection;
-            if (string.Equals(frame.SourceIp, pair.ClientIp, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(frame.DestIp, pair.ServerIp, StringComparison.OrdinalIgnoreCase))
+            if (frame.SourceIp.Equals(pair.ClientIp) && frame.DestIp.Equals(pair.ServerIp))
             {
                 candidateDirection = TrafficDirection.ClientToServer;
             }
-            else if (string.Equals(frame.SourceIp, pair.ServerIp, StringComparison.OrdinalIgnoreCase) &&
-                     string.Equals(frame.DestIp, pair.ClientIp, StringComparison.OrdinalIgnoreCase))
+            else if (frame.SourceIp.Equals(pair.ServerIp) && frame.DestIp.Equals(pair.ClientIp))
             {
                 candidateDirection = TrafficDirection.ServerToClient;
             }

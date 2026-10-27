@@ -1,3 +1,4 @@
+using System.Net;
 using System.Runtime.CompilerServices;
 using Analyzer.Core.Domain;
 using Analyzer.Core.Interfaces;
@@ -14,6 +15,9 @@ public class IngestionPipelineOrchestratorTests
         var sessionId = Guid.NewGuid();
         var pairId = Guid.NewGuid();
         var tagId = Guid.NewGuid();
+        var clientIp = IPAddress.Parse("10.0.1.10");
+        var serverIp = IPAddress.Parse("10.0.1.20");
+        var unmatchedIp = IPAddress.Parse("192.168.1.99");
 
         var session = new TestSession(
             Id: sessionId,
@@ -28,8 +32,8 @@ public class IngestionPipelineOrchestratorTests
             SessionId: sessionId,
             Name: "RTAC_to_Relay",
             Protocol: ProtocolType.ModbusTcp,
-            ClientIp: "10.0.1.10",
-            ServerIp: "10.0.1.20",
+            ClientIp: clientIp,
+            ServerIp: serverIp,
             ClientProtocolAddressId: null,
             ServerProtocolAddressId: 1);
 
@@ -37,7 +41,7 @@ public class IngestionPipelineOrchestratorTests
             Id: tagId,
             DevicePairId: pairId,
             TagName: "Bus_Volts_A",
-            ProtocolAddress: "HR:40001",
+            ProtocolAddress: ProtocolAddress.Parse("HR:40001"),
             DataType: TagDataType.UInt16,
             ScaleMultiplier: 0.1,
             ScaleOffset: 0.0,
@@ -52,9 +56,9 @@ public class IngestionPipelineOrchestratorTests
             new(
                 FrameNumber: 1,
                 TimestampUtc: t0,
-                SourceIp: "192.168.1.99",
+                SourceIp: unmatchedIp,
                 SourcePort: 50000,
-                DestIp: "10.0.1.20",
+                DestIp: serverIp,
                 DestPort: 502,
                 ProtocolName: ProtocolType.ModbusTcp,
                 RawApplicationPayload: [0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03]),
@@ -63,9 +67,9 @@ public class IngestionPipelineOrchestratorTests
             new(
                 FrameNumber: 2,
                 TimestampUtc: t0.AddMilliseconds(10),
-                SourceIp: "10.0.1.10",
+                SourceIp: clientIp,
                 SourcePort: 50001,
-                DestIp: "10.0.1.20",
+                DestIp: serverIp,
                 DestPort: 502,
                 ProtocolName: ProtocolType.ModbusTcp,
                 RawApplicationPayload: [0x00, 0x99, 0x00, 0x00, 0x00, 0x06, 0x02, 0x03]),
@@ -74,9 +78,9 @@ public class IngestionPipelineOrchestratorTests
             new(
                 FrameNumber: 3,
                 TimestampUtc: t0.AddMilliseconds(100),
-                SourceIp: "10.0.1.10",
+                SourceIp: clientIp,
                 SourcePort: 50001,
-                DestIp: "10.0.1.20",
+                DestIp: serverIp,
                 DestPort: 502,
                 ProtocolName: ProtocolType.ModbusTcp,
                 RawApplicationPayload: [0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03],
@@ -86,9 +90,9 @@ public class IngestionPipelineOrchestratorTests
             new(
                 FrameNumber: 4,
                 TimestampUtc: t0.AddMilliseconds(1200),
-                SourceIp: "10.0.1.10",
+                SourceIp: clientIp,
                 SourcePort: 50001,
-                DestIp: "10.0.1.20",
+                DestIp: serverIp,
                 DestPort: 502,
                 ProtocolName: ProtocolType.ModbusTcp,
                 RawApplicationPayload: [0x00, 0x02, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03],
@@ -98,9 +102,9 @@ public class IngestionPipelineOrchestratorTests
             new(
                 FrameNumber: 5,
                 TimestampUtc: t0.AddMilliseconds(1250),
-                SourceIp: "10.0.1.20",
+                SourceIp: serverIp,
                 SourcePort: 502,
-                DestIp: "10.0.1.10",
+                DestIp: clientIp,
                 DestPort: 50001,
                 ProtocolName: ProtocolType.ModbusTcp,
                 RawApplicationPayload: [0x00, 0x02, 0x00, 0x00, 0x00, 0x05, 0x01, 0x03, 0x02, 0x05, 0x64],
@@ -117,9 +121,9 @@ public class IngestionPipelineOrchestratorTests
             new(
                 FrameNumber: 6,
                 TimestampUtc: t0.AddMilliseconds(1300),
-                SourceIp: "10.0.1.10",
+                SourceIp: clientIp,
                 SourcePort: 50001,
-                DestIp: "10.0.1.20",
+                DestIp: serverIp,
                 DestPort: 502,
                 ProtocolName: ProtocolType.ModbusTcp,
                 RawApplicationPayload: [0x00, 0x03, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03],
@@ -138,7 +142,7 @@ public class IngestionPipelineOrchestratorTests
 
         Assert.Equal(sessionId, dataSink.InitializedSession?.Id);
         Assert.True(dataSink.InitialStatesUpdated);
-        Assert.Equal("COMPLETED", dataSink.CompletedStatus);
+        Assert.Equal(SessionStatus.Completed, dataSink.CompletedStatus);
 
         // Verify 3 RED transactions in exact order:
         // 1. TX-1 mid-stream TIMEOUT
@@ -238,7 +242,8 @@ public class IngestionPipelineOrchestratorTests
                     transactions.Add(tx);
                 }
 
-                if (frame.DissectedFields.TryGetValue("address", out var address) &&
+                if (frame.DissectedFields.TryGetValue("address", out var addressStr) &&
+                    ProtocolAddress.TryParse(addressStr, out var address) &&
                     frame.DissectedFields.TryGetValue("value", out var valStr) &&
                     double.TryParse(valStr, out var unscaled))
                 {
@@ -254,7 +259,7 @@ public class IngestionPipelineOrchestratorTests
                             unscaledNumericValue: unscaled,
                             booleanValue: null,
                             rawHex: rawHex,
-                            qualityFlags: "ONLINE",
+                            qualityFlags: PointQualityFlags.Online,
                             out var dp))
                     {
                         dataPoints.Add(dp);
@@ -277,7 +282,7 @@ public class IngestionPipelineOrchestratorTests
         public List<CapturedCommandEventRecord> CommandEvents { get; } = [];
         public List<ModbusUnmappedRecord> UnmappedRegisters { get; } = [];
         public bool InitialStatesUpdated { get; private set; }
-        public string? CompletedStatus { get; private set; }
+        public SessionStatus? CompletedStatus { get; private set; }
 
         public Task InitializeSessionAsync(
             TestSession session,
@@ -304,7 +309,7 @@ public class IngestionPipelineOrchestratorTests
             return Task.CompletedTask;
         }
 
-        public Task CompleteSessionAsync(Guid sessionId, string status, CancellationToken ct)
+        public Task CompleteSessionAsync(Guid sessionId, SessionStatus status, CancellationToken ct)
         {
             CompletedStatus = status;
             return Task.CompletedTask;
