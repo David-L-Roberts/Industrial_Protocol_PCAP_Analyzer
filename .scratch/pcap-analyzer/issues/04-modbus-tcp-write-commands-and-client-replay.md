@@ -4,11 +4,11 @@
 
 **Blocked by:** 03: Modbus TCP Read Telemetry, RED Transactions & Unmapped Register Capture
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Decodes `ClientToServer` write requests for FC `05` (`MODBUS_WRITE_SINGLE_COIL`), FC `06` (`MODBUS_WRITE_SINGLE_REG`), FC `15` (`MODBUS_WRITE_MULTI_COILS`), and FC `16` (`MODBUS_WRITE_MULTI_REGS`).
-- [ ] Emits a `CapturedCommandEventRecord` for each write command with target address, command count, unscaled command value (where applicable), and exact application PDU bytes (`RawPduBytes`).
-- [ ] Emits `ExtractedDataPointRecord` updates for any written addresses that match a configured `TagDefinition`.
-- [ ] Correlates write requests with `ServerToClient` write echoes/responses (and exception responses) to emit complete `ProtocolTransactionRecord` RED Metrics.
-- [ ] Verified by unit tests using raw byte arrays for single and multi-point write function codes.
+- [x] Decodes `ClientToServer` write requests for FC `05` (`MODBUS_WRITE_SINGLE_COIL`), FC `06` (`MODBUS_WRITE_SINGLE_REG`), FC `15` (`MODBUS_WRITE_MULTI_COILS`), and FC `16` (`MODBUS_WRITE_MULTI_REGS`).
+- [x] Emits a `CapturedCommandEventRecord` for each write command with target address, command count, unscaled command value (where applicable), and exact application PDU bytes (`RawPduBytes`).
+- [x] Emits `ExtractedDataPointRecord` updates for any written addresses that match a configured `TagDefinition`.
+- [x] Correlates write requests with `ServerToClient` write echoes/responses (and exception responses) to emit complete `ProtocolTransactionRecord` RED Metrics.
+- [x] Verified by unit tests using raw byte arrays for single and multi-point write function codes.
 

@@ -11,7 +11,11 @@ public enum ModbusFunctionCode : byte
     ReadCoils = 0x01,
     ReadDiscreteInputs = 0x02,
     ReadHoldingRegisters = 0x03,
-    ReadInputRegisters = 0x04
+    ReadInputRegisters = 0x04,
+    WriteSingleCoil = 0x05,
+    WriteSingleRegister = 0x06,
+    WriteMultipleCoils = 0x0F,
+    WriteMultipleRegisters = 0x10
 }
 
 public class ModbusTcpDecoder : IProtocolDecoder
@@ -19,7 +23,7 @@ public class ModbusTcpDecoder : IProtocolDecoder
     private const byte ExceptionFlag = 0x80;
     private const byte FunctionCodeMask = 0x7F;
 
-    private readonly record struct ReadRequestContext(
+    private readonly record struct ModbusRequestContext(
         byte UnitId,
         ModbusFunctionCode FunctionCode,
         ushort StartAddress,
@@ -93,6 +97,7 @@ public class ModbusTcpDecoder : IProtocolDecoder
 
         var transactions = new List<ProtocolTransactionRecord>();
         var dataPoints = new List<ExtractedDataPointRecord>();
+        var commandEvents = new List<CapturedCommandEventRecord>();
         var unmappedRegisters = new List<ModbusUnmappedRecord>();
 
         if (direction == TrafficDirection.ClientToServer)
@@ -101,7 +106,7 @@ public class ModbusTcpDecoder : IProtocolDecoder
             {
                 ushort startAddress = BinaryPrimitives.ReadUInt16BigEndian(pdu.Slice(1, 2));
                 ushort quantity = BinaryPrimitives.ReadUInt16BigEndian(pdu.Slice(3, 2));
-                var context = new ReadRequestContext(unitId, readFc, startAddress, quantity);
+                var context = new ModbusRequestContext(unitId, readFc, startAddress, quantity);
 
                 _redEngine.RegisterRequest(
                     sessionId: pair.SessionId,
@@ -113,13 +118,32 @@ public class ModbusTcpDecoder : IProtocolDecoder
                     requestContext: context,
                     correlationKey: correlationKey);
             }
+            else if (!isException && TryParseWriteFunctionCode(rawFc, out var writeFc))
+            {
+                var extractionContext = new FrameExtractionContext(
+                    frame,
+                    pair,
+                    direction,
+                    unitId,
+                    ToRegisterType(writeFc));
+
+                ProcessWriteRequest(
+                    extractionContext,
+                    transactionId,
+                    correlationKey,
+                    writeFc,
+                    pdu,
+                    dataPoints,
+                    commandEvents,
+                    unmappedRegisters);
+            }
         }
         else
         {
             if (isException)
             {
                 var statusCode = MapExceptionStatusCode(pdu[1]);
-                if (_redEngine.TryCompleteResponse<ReadRequestContext>(
+                if (_redEngine.TryCompleteResponse<ModbusRequestContext>(
                         devicePairId: pair.Id,
                         transactionId: transactionId,
                         responseFrameNumber: frame.FrameNumber,
@@ -136,7 +160,7 @@ public class ModbusTcpDecoder : IProtocolDecoder
             }
             else if (TryParseReadFunctionCode(rawFc, out var readFc))
             {
-                if (_redEngine.TryCompleteResponse<ReadRequestContext>(
+                if (_redEngine.TryCompleteResponse<ModbusRequestContext>(
                         devicePairId: pair.Id,
                         transactionId: transactionId,
                         responseFrameNumber: frame.FrameNumber,
@@ -181,13 +205,137 @@ public class ModbusTcpDecoder : IProtocolDecoder
                     }
                 }
             }
+            else if (TryParseWriteFunctionCode(rawFc, out _))
+            {
+                if (_redEngine.TryCompleteResponse<ModbusRequestContext>(
+                        devicePairId: pair.Id,
+                        transactionId: transactionId,
+                        responseFrameNumber: frame.FrameNumber,
+                        responseTimestampUtc: frame.TimestampUtc,
+                        responseFunctionCode: rawFc,
+                        isException: false,
+                        statusCode: TransactionStatusCode.Success,
+                        out var okTx,
+                        out _,
+                        correlationKey: correlationKey))
+                {
+                    transactions.Add(okTx);
+                }
+            }
         }
 
-        return new ProtocolDecodeOutput(transactions, dataPoints, [], unmappedRegisters);
+        return new ProtocolDecodeOutput(transactions, dataPoints, commandEvents, unmappedRegisters);
     }
 
     public IReadOnlyList<ProtocolTransactionRecord> FlushExpiredTimeouts(DateTime currentVirtualTime, bool isEndOfFile) =>
         _redEngine.FlushExpiredTimeouts(currentVirtualTime, isEndOfFile);
+
+    private void ProcessWriteRequest(
+        FrameExtractionContext extractionContext,
+        string transactionId,
+        string correlationKey,
+        ModbusFunctionCode writeFc,
+        ReadOnlySpan<byte> pdu,
+        List<ExtractedDataPointRecord> dataPoints,
+        List<CapturedCommandEventRecord> commandEvents,
+        List<ModbusUnmappedRecord> unmappedRegisters)
+    {
+        ushort startAddress = BinaryPrimitives.ReadUInt16BigEndian(pdu.Slice(1, 2));
+        bool isSingleWrite = writeFc is ModbusFunctionCode.WriteSingleCoil or ModbusFunctionCode.WriteSingleRegister;
+        ushort quantity = isSingleWrite ? (ushort)1 : BinaryPrimitives.ReadUInt16BigEndian(pdu.Slice(3, 2));
+
+        var reqContext = new ModbusRequestContext(extractionContext.UnitId, writeFc, startAddress, quantity);
+        _redEngine.RegisterRequest(
+            sessionId: extractionContext.Pair.SessionId,
+            devicePairId: extractionContext.Pair.Id,
+            frameNumber: extractionContext.Frame.FrameNumber,
+            timestampUtc: extractionContext.Frame.TimestampUtc,
+            transactionId: transactionId,
+            functionCode: (byte)writeFc,
+            requestContext: reqContext,
+            correlationKey: correlationKey);
+
+        bool hasTag = TryFindMappedTag(extractionContext.Pair.Id, extractionContext.RegisterType, startAddress, out var tag);
+        ProtocolAddress targetAddress = hasTag
+            ? tag.ProtocolAddress
+            : FormatDefaultAddress(extractionContext.RegisterType, startAddress);
+
+        double? unscaledCommandValue;
+        CommandType commandType;
+
+        if (writeFc == ModbusFunctionCode.WriteSingleCoil)
+        {
+            commandType = CommandType.ModbusWriteSingleCoil;
+            ReadOnlySpan<byte> valueBytes = pdu.Slice(3, 2);
+            bool coilOn = BinaryPrimitives.ReadUInt16BigEndian(valueBytes) != 0;
+            unscaledCommandValue = coilOn ? 1.0 : 0.0;
+            Span<byte> bitByte = stackalloc byte[1] { coilOn ? (byte)1 : (byte)0 };
+            ExtractBits(extractionContext, startAddress, requestedQuantity: 1, bitByte, dataPoints, unmappedRegisters);
+        }
+        else if (writeFc == ModbusFunctionCode.WriteSingleRegister)
+        {
+            commandType = CommandType.ModbusWriteSingleReg;
+            ReadOnlySpan<byte> valueBytes = pdu.Slice(3, 2);
+            unscaledCommandValue = ReadSingleRegisterCommandValue(valueBytes, hasTag, tag);
+            ExtractRegisters(extractionContext, startAddress, requestedQuantity: 1, valueBytes, dataPoints, unmappedRegisters);
+        }
+        else if (writeFc == ModbusFunctionCode.WriteMultipleCoils)
+        {
+            commandType = CommandType.ModbusWriteMultiCoils;
+            int byteCount = pdu[5];
+            ReadOnlySpan<byte> dataBytes = pdu.Slice(6, byteCount);
+            ExtractBits(extractionContext, startAddress, quantity, dataBytes, dataPoints, unmappedRegisters);
+            unscaledCommandValue = quantity == 1
+                ? ((dataBytes[0] & 0x01) != 0 ? 1.0 : 0.0)
+                : null;
+        }
+        else
+        {
+            commandType = CommandType.ModbusWriteMultiRegs;
+            int byteCount = pdu[5];
+            ReadOnlySpan<byte> dataBytes = pdu.Slice(6, byteCount);
+            int pointsBefore = dataPoints.Count;
+            ExtractRegisters(extractionContext, startAddress, quantity, dataBytes, dataPoints, unmappedRegisters);
+
+            if (quantity == 1)
+            {
+                unscaledCommandValue = ReadSingleRegisterCommandValue(dataBytes[..2], hasTag, tag);
+            }
+            else if (quantity == 2 &&
+                     hasTag &&
+                     tag.DataType is TagDataType.Int32 or TagDataType.Float32Be or TagDataType.Float32Swapped &&
+                     dataPoints.Count == pointsBefore + 1)
+            {
+                unscaledCommandValue = dataPoints[pointsBefore].UnscaledNumericValue;
+            }
+            else
+            {
+                unscaledCommandValue = null;
+            }
+        }
+
+        commandEvents.Add(new CapturedCommandEventRecord(
+            Timestamp: extractionContext.Frame.TimestampUtc,
+            SessionId: extractionContext.Pair.SessionId,
+            DevicePairId: extractionContext.Pair.Id,
+            FrameNumber: extractionContext.Frame.FrameNumber,
+            Direction: extractionContext.Direction,
+            Protocol: ProtocolType.ModbusTcp,
+            FunctionCode: (byte)writeFc,
+            CommandType: commandType,
+            TargetAddress: targetAddress,
+            ControlAction: null,
+            CommandCount: (short)quantity,
+            PulseOnMs: null,
+            PulseOffMs: null,
+            UnscaledCommandValue: unscaledCommandValue,
+            RawPduBytes: extractionContext.Frame.RawApplicationPayload.ToArray()));
+    }
+
+    private static double ReadSingleRegisterCommandValue(ReadOnlySpan<byte> twoBytes, bool hasTag, TagDefinition? tag) =>
+        hasTag && tag is not null && tag.DataType == TagDataType.Int16
+            ? BinaryPrimitives.ReadInt16BigEndian(twoBytes)
+            : BinaryPrimitives.ReadUInt16BigEndian(twoBytes);
 
     private void ExtractBits(
         FrameExtractionContext context,
@@ -356,14 +504,7 @@ public class ModbusTcpDecoder : IProtocolDecoder
         int wireOffset,
         out TagDefinition tag)
     {
-        (string prefix, int? modiconBase) = registerType switch
-        {
-            ModbusRegisterType.Holding => ("HR", 40001),
-            ModbusRegisterType.Input => ("IR", 30001),
-            ModbusRegisterType.Coil => ("COIL", null),
-            ModbusRegisterType.DiscreteInput => ("DI", 10001),
-            _ => ("HR", (int?)null)
-        };
+        var (prefix, modiconBase) = GetAddressScheme(registerType);
 
         if (TryLookupAddress(devicePairId, $"{prefix}:{wireOffset}", out tag) ||
             TryLookupAddress(devicePairId, $"{prefix}:{wireOffset:D5}", out tag))
@@ -399,6 +540,24 @@ public class ModbusTcpDecoder : IProtocolDecoder
         return false;
     }
 
+    private static ProtocolAddress FormatDefaultAddress(ModbusRegisterType registerType, int wireOffset)
+    {
+        var (prefix, modiconBase) = GetAddressScheme(registerType);
+        return modiconBase.HasValue
+            ? ProtocolAddress.Parse($"{prefix}:{modiconBase.Value + wireOffset}")
+            : ProtocolAddress.Parse($"{prefix}:{wireOffset:D5}");
+    }
+
+    private static (string Prefix, int? ModiconBase) GetAddressScheme(ModbusRegisterType registerType) =>
+        registerType switch
+        {
+            ModbusRegisterType.Holding => ("HR", 40001),
+            ModbusRegisterType.Input => ("IR", 30001),
+            ModbusRegisterType.Coil => ("COIL", null),
+            ModbusRegisterType.DiscreteInput => ("DI", 10001),
+            _ => ("HR", 40001)
+        };
+
     private static bool TryParseReadFunctionCode(byte rawFc, out ModbusFunctionCode functionCode)
     {
         switch ((ModbusFunctionCode)rawFc)
@@ -415,15 +574,38 @@ public class ModbusTcpDecoder : IProtocolDecoder
         }
     }
 
+    private static bool TryParseWriteFunctionCode(byte rawFc, out ModbusFunctionCode functionCode)
+    {
+        switch ((ModbusFunctionCode)rawFc)
+        {
+            case ModbusFunctionCode.WriteSingleCoil:
+            case ModbusFunctionCode.WriteSingleRegister:
+            case ModbusFunctionCode.WriteMultipleCoils:
+            case ModbusFunctionCode.WriteMultipleRegisters:
+                functionCode = (ModbusFunctionCode)rawFc;
+                return true;
+            default:
+                functionCode = default;
+                return false;
+        }
+    }
+
     private static bool IsBitFunction(ModbusFunctionCode functionCode) =>
-        functionCode is ModbusFunctionCode.ReadCoils or ModbusFunctionCode.ReadDiscreteInputs;
+        functionCode is ModbusFunctionCode.ReadCoils
+            or ModbusFunctionCode.ReadDiscreteInputs
+            or ModbusFunctionCode.WriteSingleCoil
+            or ModbusFunctionCode.WriteMultipleCoils;
 
     private static ModbusRegisterType ToRegisterType(ModbusFunctionCode functionCode) =>
         functionCode switch
         {
-            ModbusFunctionCode.ReadCoils => ModbusRegisterType.Coil,
+            ModbusFunctionCode.ReadCoils
+                or ModbusFunctionCode.WriteSingleCoil
+                or ModbusFunctionCode.WriteMultipleCoils => ModbusRegisterType.Coil,
             ModbusFunctionCode.ReadDiscreteInputs => ModbusRegisterType.DiscreteInput,
-            ModbusFunctionCode.ReadHoldingRegisters => ModbusRegisterType.Holding,
+            ModbusFunctionCode.ReadHoldingRegisters
+                or ModbusFunctionCode.WriteSingleRegister
+                or ModbusFunctionCode.WriteMultipleRegisters => ModbusRegisterType.Holding,
             ModbusFunctionCode.ReadInputRegisters => ModbusRegisterType.Input,
             _ => ModbusRegisterType.Holding
         };
@@ -480,6 +662,43 @@ public class ModbusTcpDecoder : IProtocolDecoder
                     return false;
                 }
             }
+            else if (TryParseWriteFunctionCode(rawFc, out var writeFc))
+            {
+                if (writeFc is ModbusFunctionCode.WriteSingleCoil or ModbusFunctionCode.WriteSingleRegister)
+                {
+                    if (pdu.Length < 5)
+                    {
+                        return false;
+                    }
+                }
+                else
+                {
+                    if (pdu.Length < 6)
+                    {
+                        return false;
+                    }
+
+                    ushort quantity = BinaryPrimitives.ReadUInt16BigEndian(pdu.Slice(3, 2));
+                    int byteCount = pdu[5];
+                    if (quantity == 0 || byteCount == 0 || pdu.Length < 6 + byteCount)
+                    {
+                        return false;
+                    }
+
+                    if (writeFc == ModbusFunctionCode.WriteMultipleCoils)
+                    {
+                        int requiredBytes = (quantity + 7) / 8;
+                        if (byteCount < requiredBytes)
+                        {
+                            return false;
+                        }
+                    }
+                    else if (byteCount != quantity * 2)
+                    {
+                        return false;
+                    }
+                }
+            }
         }
         else
         {
@@ -504,6 +723,13 @@ public class ModbusTcpDecoder : IProtocolDecoder
                 }
 
                 if (!IsBitFunction(readFc) && byteCount % 2 != 0)
+                {
+                    return false;
+                }
+            }
+            else if (TryParseWriteFunctionCode(rawFc, out _))
+            {
+                if (pdu.Length < 5)
                 {
                     return false;
                 }

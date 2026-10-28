@@ -52,6 +52,8 @@ public class ModbusTcpDecoderTests
     [InlineData(new byte[] { 0x00, 0x0A, 0x00, 0x00, 0x00, 0x05, 0x01, 0x03, 0x04, 0x12, 0x34 }, TrafficDirection.ServerToClient, "10", 3)]
     // 6. Odd ByteCount in 16-bit Register Read Response (FC 03 with ByteCount = 3)
     [InlineData(new byte[] { 0x00, 0x0B, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03, 0x03, 0x12, 0x34, 0x56 }, TrafficDirection.ServerToClient, "11", 3)]
+    // 7. Truncated Write Multiple Registers Request PDU (FC 16 with Quantity = 2, ByteCount = 4, but only 2 data bytes present)
+    [InlineData(new byte[] { 0x00, 0x0C, 0x00, 0x00, 0x00, 0x09, 0x01, 0x10, 0x00, 0x00, 0x00, 0x02, 0x04, 0x12, 0x34 }, TrafficDirection.ClientToServer, "12", 16)]
     public void ProcessFrame_TruncatedOrInvalidMbapOrPduFraming_EmitsMalformedTransactionRecord(
         byte[] malformedPayload,
         TrafficDirection direction,
@@ -473,5 +475,246 @@ public class ModbusTcpDecoderTests
         Assert.Equal(ModbusRegisterType.DiscreteInput, unmappedDi.RegisterType);
         Assert.Equal(1, unmappedDi.RegisterOffset);
         Assert.Equal("01", unmappedDi.RawValueHex);
+    }
+
+    [Fact]
+    public void ProcessFrame_Fc05WriteSingleCoilAndFc06WriteSingleRegister_EmitsCommandEventsUpdatesMappedTagsAndCorrelatesEchoAndExceptionResponses()
+    {
+        var coilTagId = Guid.Parse("50000000-0000-0000-0000-000000000001");
+        var hrTagId = Guid.Parse("50000000-0000-0000-0000-000000000002");
+
+        var tags = new[]
+        {
+            new TagDefinition(
+                Id: coilTagId,
+                DevicePairId: PairId,
+                TagName: "Breaker_52A_Cmd",
+                ProtocolAddress: ProtocolAddress.Parse("COIL:00005"),
+                DataType: TagDataType.Bool,
+                ScaleMultiplier: 1.0,
+                ScaleOffset: 0.0,
+                EngineeringUnits: null,
+                Description: "Breaker Close Coil"),
+
+            new TagDefinition(
+                Id: hrTagId,
+                DevicePairId: PairId,
+                TagName: "Setpoint_kV",
+                ProtocolAddress: ProtocolAddress.Parse("HR:40005"),
+                DataType: TagDataType.UInt16,
+                ScaleMultiplier: 0.1,
+                ScaleOffset: 0.0,
+                EngineeringUnits: "kV",
+                Description: "Voltage Setpoint")
+        };
+
+        var pair = CreatePair(unitId: 1);
+        var redEngine = new VirtualClockRedEngine(timeoutThresholdMs: 2000);
+        var tagEngine = new TagResolutionEngine(tags);
+        var decoder = new ModbusTcpDecoder(redEngine, tagEngine, storeUnmappedRegisters: false);
+
+        // 1. FC 05 Write Single Coil (ClientToServer): TxId = 100 (0x0064), UnitId = 1, Address = 5 (0x0005), Value = 0xFF00 (ON)
+        byte[] fc05ReqBytes = [0x00, 0x64, 0x00, 0x00, 0x00, 0x06, 0x01, 0x05, 0x00, 0x05, 0xFF, 0x00];
+        var fc05ReqOut = decoder.ProcessFrame(
+            CreateFrame(10, BaseTime, TrafficDirection.ClientToServer, fc05ReqBytes),
+            pair,
+            TrafficDirection.ClientToServer);
+
+        Assert.Empty(fc05ReqOut.Transactions);
+        var fc05Cmd = Assert.Single(fc05ReqOut.CommandEvents);
+        Assert.Equal(BaseTime, fc05Cmd.Timestamp);
+        Assert.Equal(SessionId, fc05Cmd.SessionId);
+        Assert.Equal(PairId, fc05Cmd.DevicePairId);
+        Assert.Equal(10, fc05Cmd.FrameNumber);
+        Assert.Equal(TrafficDirection.ClientToServer, fc05Cmd.Direction);
+        Assert.Equal(ProtocolType.ModbusTcp, fc05Cmd.Protocol);
+        Assert.Equal(5, fc05Cmd.FunctionCode);
+        Assert.Equal(CommandType.ModbusWriteSingleCoil, fc05Cmd.CommandType);
+        Assert.Equal(ProtocolAddress.Parse("COIL:00005"), fc05Cmd.TargetAddress);
+        Assert.Null(fc05Cmd.ControlAction);
+        Assert.Equal((short)1, fc05Cmd.CommandCount);
+        Assert.Null(fc05Cmd.PulseOnMs);
+        Assert.Null(fc05Cmd.PulseOffMs);
+        Assert.Equal(1.0, fc05Cmd.UnscaledCommandValue);
+        Assert.Equal(fc05ReqBytes, fc05Cmd.RawPduBytes);
+
+        var fc05Dp = Assert.Single(fc05ReqOut.DataPoints);
+        Assert.Equal(coilTagId, fc05Dp.TagId);
+        Assert.Equal(TrafficDirection.ClientToServer, fc05Dp.Direction);
+        Assert.True(fc05Dp.BooleanValue);
+        Assert.Equal("01", fc05Dp.RawHex);
+        Assert.True(fc05Dp.IsValueChange);
+
+        // FC 05 Echo Response (ServerToClient) at T + 12.5ms
+        var fc05RespOut = decoder.ProcessFrame(
+            CreateFrame(11, BaseTime.AddMilliseconds(12.5), TrafficDirection.ServerToClient, fc05ReqBytes),
+            pair,
+            TrafficDirection.ServerToClient);
+
+        var fc05Tx = Assert.Single(fc05RespOut.Transactions);
+        Assert.Equal("100", fc05Tx.TransactionId);
+        Assert.Equal(5, fc05Tx.FunctionCode);
+        Assert.Equal(12.5, fc05Tx.DurationMs!.Value, precision: 5);
+        Assert.False(fc05Tx.IsError);
+        Assert.Equal(TransactionStatusCode.Success, fc05Tx.StatusCode);
+        Assert.Empty(fc05RespOut.CommandEvents);
+        Assert.Empty(fc05RespOut.DataPoints);
+
+        // 2. FC 06 Write Single Register (ClientToServer): TxId = 101 (0x0065), UnitId = 1, Address = 4 (HR:40005), Value = 1320 (0x0528 -> 132.0 kV)
+        byte[] fc06ReqBytes = [0x00, 0x65, 0x00, 0x00, 0x00, 0x06, 0x01, 0x06, 0x00, 0x04, 0x05, 0x28];
+        var fc06ReqOut = decoder.ProcessFrame(
+            CreateFrame(12, BaseTime.AddMilliseconds(50), TrafficDirection.ClientToServer, fc06ReqBytes),
+            pair,
+            TrafficDirection.ClientToServer);
+
+        var fc06Cmd = Assert.Single(fc06ReqOut.CommandEvents);
+        Assert.Equal(6, fc06Cmd.FunctionCode);
+        Assert.Equal(CommandType.ModbusWriteSingleReg, fc06Cmd.CommandType);
+        Assert.Equal(ProtocolAddress.Parse("HR:40005"), fc06Cmd.TargetAddress);
+        Assert.Equal((short)1, fc06Cmd.CommandCount);
+        Assert.Equal(1320.0, fc06Cmd.UnscaledCommandValue);
+        Assert.Equal(fc06ReqBytes, fc06Cmd.RawPduBytes);
+
+        var fc06Dp = Assert.Single(fc06ReqOut.DataPoints);
+        Assert.Equal(hrTagId, fc06Dp.TagId);
+        Assert.Equal(TrafficDirection.ClientToServer, fc06Dp.Direction);
+        Assert.Equal(1320.0, fc06Dp.UnscaledNumericValue);
+        Assert.Equal(132.0, fc06Dp.ScaledNumericValue!.Value, precision: 5);
+        Assert.Equal("0528", fc06Dp.RawHex);
+
+        // FC 06 Exception Response (ServerToClient, 0x86 with Illegal Data Value 0x03) at T + 68ms
+        var fc06ExOut = decoder.ProcessFrame(
+            CreateFrame(13, BaseTime.AddMilliseconds(68), TrafficDirection.ServerToClient,
+                [0x00, 0x65, 0x00, 0x00, 0x00, 0x03, 0x01, 0x86, 0x03]),
+            pair,
+            TrafficDirection.ServerToClient);
+
+        var fc06Tx = Assert.Single(fc06ExOut.Transactions);
+        Assert.Equal("101", fc06Tx.TransactionId);
+        Assert.Equal(0x86, fc06Tx.FunctionCode);
+        Assert.Equal(18.0, fc06Tx.DurationMs!.Value, precision: 5);
+        Assert.True(fc06Tx.IsError);
+        Assert.Equal(TransactionErrorType.Exception, fc06Tx.ErrorType);
+        Assert.Equal(TransactionStatusCode.ModbusEx03, fc06Tx.StatusCode);
+    }
+
+    [Fact]
+    public void ProcessFrame_Fc15WriteMultiCoilsAndFc16WriteMultiRegisters_EmitsCommandEventsUpdatesMappedTagsAndCorrelatesResponses()
+    {
+        var coil10Id = Guid.Parse("60000000-0000-0000-0000-000000000001");
+        var coil12Id = Guid.Parse("60000000-0000-0000-0000-000000000002");
+        var floatTagId = Guid.Parse("60000000-0000-0000-0000-000000000003");
+        var reg20Id = Guid.Parse("60000000-0000-0000-0000-000000000004");
+        var reg21Id = Guid.Parse("60000000-0000-0000-0000-000000000005");
+
+        var tags = new[]
+        {
+            new TagDefinition(coil10Id, PairId, "Coil_10", ProtocolAddress.Parse("COIL:00010"), TagDataType.Bool, 1.0, 0.0, null, null),
+            new TagDefinition(coil12Id, PairId, "Coil_12", ProtocolAddress.Parse("COIL:00012"), TagDataType.Bool, 1.0, 0.0, null, null),
+            new TagDefinition(floatTagId, PairId, "Target_MW", ProtocolAddress.Parse("HR:40011"), TagDataType.Float32Be, 2.0, 0.0, "MW", null),
+            new TagDefinition(reg20Id, PairId, "Limit_Lo", ProtocolAddress.Parse("HR:40021"), TagDataType.UInt16, 1.0, 0.0, null, null),
+            new TagDefinition(reg21Id, PairId, "Limit_Hi", ProtocolAddress.Parse("HR:40022"), TagDataType.UInt16, 1.0, 0.0, null, null)
+        };
+
+        var pair = CreatePair(unitId: 1);
+        var redEngine = new VirtualClockRedEngine(timeoutThresholdMs: 2000);
+        var tagEngine = new TagResolutionEngine(tags);
+        var decoder = new ModbusTcpDecoder(redEngine, tagEngine, storeUnmappedRegisters: true);
+
+        // 1. FC 15 (0x0F) Write Multiple Coils: TxId = 200 (0x00C8), StartAddress = 10 (0x000A), Quantity = 3 (0x0003), ByteCount = 1, Value = 0b0000_0101 (0x05)
+        // Coil 10 = true, Coil 11 (unmapped) = false, Coil 12 = true
+        byte[] fc15ReqBytes = [0x00, 0xC8, 0x00, 0x00, 0x00, 0x08, 0x01, 0x0F, 0x00, 0x0A, 0x00, 0x03, 0x01, 0x05];
+        var fc15ReqOut = decoder.ProcessFrame(
+            CreateFrame(20, BaseTime, TrafficDirection.ClientToServer, fc15ReqBytes),
+            pair,
+            TrafficDirection.ClientToServer);
+
+        var fc15Cmd = Assert.Single(fc15ReqOut.CommandEvents);
+        Assert.Equal(15, fc15Cmd.FunctionCode);
+        Assert.Equal(CommandType.ModbusWriteMultiCoils, fc15Cmd.CommandType);
+        Assert.Equal(ProtocolAddress.Parse("COIL:00010"), fc15Cmd.TargetAddress);
+        Assert.Equal((short)3, fc15Cmd.CommandCount);
+        Assert.Null(fc15Cmd.UnscaledCommandValue);
+        Assert.Equal(fc15ReqBytes, fc15Cmd.RawPduBytes);
+
+        Assert.Equal(2, fc15ReqOut.DataPoints.Count);
+        Assert.Equal(coil10Id, fc15ReqOut.DataPoints[0].TagId);
+        Assert.True(fc15ReqOut.DataPoints[0].BooleanValue);
+        Assert.Equal(coil12Id, fc15ReqOut.DataPoints[1].TagId);
+        Assert.True(fc15ReqOut.DataPoints[1].BooleanValue);
+
+        var unmappedCoil11 = Assert.Single(fc15ReqOut.UnmappedRegisters);
+        Assert.Equal(ModbusRegisterType.Coil, unmappedCoil11.RegisterType);
+        Assert.Equal(11, unmappedCoil11.RegisterOffset);
+        Assert.Equal("00", unmappedCoil11.RawValueHex);
+
+        // FC 15 Response (ServerToClient): echoes StartAddress = 10, Quantity = 3
+        var fc15RespOut = decoder.ProcessFrame(
+            CreateFrame(21, BaseTime.AddMilliseconds(14), TrafficDirection.ServerToClient,
+                [0x00, 0xC8, 0x00, 0x00, 0x00, 0x06, 0x01, 0x0F, 0x00, 0x0A, 0x00, 0x03]),
+            pair,
+            TrafficDirection.ServerToClient);
+
+        var fc15Tx = Assert.Single(fc15RespOut.Transactions);
+        Assert.Equal("200", fc15Tx.TransactionId);
+        Assert.Equal(15, fc15Tx.FunctionCode);
+        Assert.Equal(14.0, fc15Tx.DurationMs!.Value, precision: 5);
+        Assert.False(fc15Tx.IsError);
+
+        // 2. FC 16 (0x10) Write Multiple Registers for a single 32-bit float tag (Start = 10 -> HR:40011, Quantity = 2, Value = 12.5f = 0x41480000)
+        byte[] fc16FloatReqBytes =
+        [
+            0x00, 0xC9, 0x00, 0x00, 0x00, 0x0B, 0x01,
+            0x10, 0x00, 0x0A, 0x00, 0x02, 0x04, 0x41, 0x48, 0x00, 0x00
+        ];
+        var fc16FloatOut = decoder.ProcessFrame(
+            CreateFrame(22, BaseTime.AddMilliseconds(30), TrafficDirection.ClientToServer, fc16FloatReqBytes),
+            pair,
+            TrafficDirection.ClientToServer);
+
+        var fc16FloatCmd = Assert.Single(fc16FloatOut.CommandEvents);
+        Assert.Equal(16, fc16FloatCmd.FunctionCode);
+        Assert.Equal(CommandType.ModbusWriteMultiRegs, fc16FloatCmd.CommandType);
+        Assert.Equal(ProtocolAddress.Parse("HR:40011"), fc16FloatCmd.TargetAddress);
+        Assert.Equal((short)2, fc16FloatCmd.CommandCount);
+        Assert.Equal(12.5, fc16FloatCmd.UnscaledCommandValue!.Value, precision: 5);
+        Assert.Equal(fc16FloatReqBytes, fc16FloatCmd.RawPduBytes);
+
+        var fc16FloatDp = Assert.Single(fc16FloatOut.DataPoints);
+        Assert.Equal(floatTagId, fc16FloatDp.TagId);
+        Assert.Equal(12.5, fc16FloatDp.UnscaledNumericValue!.Value, precision: 5);
+        Assert.Equal(25.0, fc16FloatDp.ScaledNumericValue!.Value, precision: 5);
+
+        // 3. FC 16 (0x10) Write Multiple Registers for two 16-bit tags (Start = 20 -> HR:40021..40022, Quantity = 2, Values = 100, 200)
+        byte[] fc16MultiReqBytes =
+        [
+            0x00, 0xCA, 0x00, 0x00, 0x00, 0x0B, 0x01,
+            0x10, 0x00, 0x14, 0x00, 0x02, 0x04, 0x00, 0x64, 0x00, 0xC8
+        ];
+        var fc16MultiOut = decoder.ProcessFrame(
+            CreateFrame(23, BaseTime.AddMilliseconds(50), TrafficDirection.ClientToServer, fc16MultiReqBytes),
+            pair,
+            TrafficDirection.ClientToServer);
+
+        var fc16MultiCmd = Assert.Single(fc16MultiOut.CommandEvents);
+        Assert.Equal(CommandType.ModbusWriteMultiRegs, fc16MultiCmd.CommandType);
+        Assert.Equal(ProtocolAddress.Parse("HR:40021"), fc16MultiCmd.TargetAddress);
+        Assert.Equal((short)2, fc16MultiCmd.CommandCount);
+        Assert.Null(fc16MultiCmd.UnscaledCommandValue);
+        Assert.Equal(2, fc16MultiOut.DataPoints.Count);
+        Assert.Equal(100.0, fc16MultiOut.DataPoints[0].UnscaledNumericValue);
+        Assert.Equal(200.0, fc16MultiOut.DataPoints[1].UnscaledNumericValue);
+
+        // FC 16 Response (ServerToClient) for TxId = 202 (0x00CA) at T + 75ms (Duration = 25ms)
+        var fc16RespOut = decoder.ProcessFrame(
+            CreateFrame(24, BaseTime.AddMilliseconds(75), TrafficDirection.ServerToClient,
+                [0x00, 0xCA, 0x00, 0x00, 0x00, 0x06, 0x01, 0x10, 0x00, 0x14, 0x00, 0x02]),
+            pair,
+            TrafficDirection.ServerToClient);
+
+        var fc16Tx = Assert.Single(fc16RespOut.Transactions);
+        Assert.Equal("202", fc16Tx.TransactionId);
+        Assert.Equal(16, fc16Tx.FunctionCode);
+        Assert.Equal(25.0, fc16Tx.DurationMs!.Value, precision: 5);
     }
 }
