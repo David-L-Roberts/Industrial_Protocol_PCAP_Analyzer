@@ -11,11 +11,12 @@ public class VirtualClockRedEngine
         long FrameNumber,
         DateTime TimestampUtc,
         string TransactionId,
+        string CorrelationKey,
         short FunctionCode,
         object? RequestContext);
 
     private readonly int _timeoutThresholdMs;
-    private readonly Dictionary<(Guid DevicePairId, string TransactionId), PendingRequest> _pendingByKey = new();
+    private readonly Dictionary<(Guid DevicePairId, string CorrelationKey), PendingRequest> _pendingByKey = new();
     private readonly PriorityQueue<PendingRequest, DateTime> _priorityQueue = new();
 
     public VirtualClockRedEngine(int timeoutThresholdMs)
@@ -35,18 +36,21 @@ public class VirtualClockRedEngine
         DateTime timestampUtc,
         string transactionId,
         short functionCode,
-        TContext? requestContext)
+        TContext? requestContext,
+        string? correlationKey = null)
     {
+        var effectiveKey = correlationKey ?? transactionId;
         var req = new PendingRequest(
             SessionId: sessionId,
             DevicePairId: devicePairId,
             FrameNumber: frameNumber,
             TimestampUtc: timestampUtc,
             TransactionId: transactionId,
+            CorrelationKey: effectiveKey,
             FunctionCode: functionCode,
             RequestContext: requestContext);
 
-        _pendingByKey[(devicePairId, transactionId)] = req;
+        _pendingByKey[(devicePairId, effectiveKey)] = req;
         _priorityQueue.Enqueue(req, timestampUtc);
     }
 
@@ -56,8 +60,9 @@ public class VirtualClockRedEngine
         long frameNumber,
         DateTime timestampUtc,
         string transactionId,
-        short functionCode) =>
-        RegisterRequest<object>(sessionId, devicePairId, frameNumber, timestampUtc, transactionId, functionCode, null);
+        short functionCode,
+        string? correlationKey = null) =>
+        RegisterRequest<object>(sessionId, devicePairId, frameNumber, timestampUtc, transactionId, functionCode, null, correlationKey);
 
     public bool TryCompleteResponse<TContext>(
         Guid devicePairId,
@@ -68,9 +73,10 @@ public class VirtualClockRedEngine
         bool isException,
         TransactionStatusCode statusCode,
         [NotNullWhen(true)] out ProtocolTransactionRecord? transaction,
-        out TContext? requestContext)
+        out TContext? requestContext,
+        string? correlationKey = null)
     {
-        var key = (devicePairId, transactionId);
+        var key = (devicePairId, correlationKey ?? transactionId);
         if (!_pendingByKey.Remove(key, out var pending))
         {
             transaction = null;
@@ -105,7 +111,8 @@ public class VirtualClockRedEngine
         short responseFunctionCode,
         bool isException,
         TransactionStatusCode statusCode,
-        [NotNullWhen(true)] out ProtocolTransactionRecord? transaction) =>
+        [NotNullWhen(true)] out ProtocolTransactionRecord? transaction,
+        string? correlationKey = null) =>
         TryCompleteResponse<object>(
             devicePairId,
             transactionId,
@@ -115,7 +122,8 @@ public class VirtualClockRedEngine
             isException,
             statusCode,
             out transaction,
-            out _);
+            out _,
+            correlationKey);
 
     public IReadOnlyList<ProtocolTransactionRecord> FlushExpiredTimeouts(DateTime currentVirtualTime, bool isEndOfFile)
     {
@@ -123,7 +131,7 @@ public class VirtualClockRedEngine
 
         while (_priorityQueue.TryPeek(out var candidate, out var reqTimestamp))
         {
-            var key = (candidate.DevicePairId, candidate.TransactionId);
+            var key = (candidate.DevicePairId, candidate.CorrelationKey);
 
             // Discard stale queue entries that were already completed or superseded
             if (!_pendingByKey.TryGetValue(key, out var active) || !ReferenceEquals(active, candidate))

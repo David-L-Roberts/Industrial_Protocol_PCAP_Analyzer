@@ -156,4 +156,34 @@ public class TagResolutionEngineTests
         Assert.False(initialStates[boolTagId].InitialBooleanValue);
         Assert.Equal("00", initialStates[boolTagId].InitialRawHex);
     }
+
+    [Fact]
+    public void TryGetTag_ConfiguredAndUnconfiguredAddresses_ReturnsMatchingTagDefinition()
+    {
+        var pairId = Guid.NewGuid();
+        var otherPairId = Guid.NewGuid();
+        var tagId = Guid.NewGuid();
+        var address = ProtocolAddress.Parse("HR:40001");
+        var tag = new TagDefinition(
+            Id: tagId,
+            DevicePairId: pairId,
+            TagName: "Bus_Volts_A",
+            ProtocolAddress: address,
+            DataType: TagDataType.Float32Be,
+            ScaleMultiplier: 0.1,
+            ScaleOffset: 0.0,
+            EngineeringUnits: "kV",
+            Description: null);
+
+        var engine = new TagResolutionEngine([tag]);
+
+        Assert.True(engine.TryGetTag(pairId, ProtocolAddress.Parse("hr:40001"), out var resolved));
+        Assert.Equal(tag, resolved);
+
+        Assert.False(engine.TryGetTag(pairId, ProtocolAddress.Parse("HR:40002"), out var unmapped));
+        Assert.Null(unmapped);
+
+        Assert.False(engine.TryGetTag(otherPairId, address, out var wrongPair));
+        Assert.Null(wrongPair);
+    }
 }

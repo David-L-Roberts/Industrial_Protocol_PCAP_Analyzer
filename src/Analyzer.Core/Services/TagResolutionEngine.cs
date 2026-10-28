@@ -24,6 +24,12 @@ public class TagResolutionEngine
         }
     }
 
+    public bool TryGetTag(
+        Guid devicePairId,
+        ProtocolAddress protocolAddress,
+        [NotNullWhen(true)] out TagDefinition? tag) =>
+        _tagsByKey.TryGetValue((devicePairId, protocolAddress), out tag);
+
     public bool TryResolveAndProject(
         Guid sessionId,
         Guid devicePairId,
