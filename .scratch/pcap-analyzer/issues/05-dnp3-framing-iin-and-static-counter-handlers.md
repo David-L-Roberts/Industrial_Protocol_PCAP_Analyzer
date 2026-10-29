@@ -6,9 +6,9 @@
 
 **Status:** ready-for-agent
 
-- [ ] Parses DNP3 Data Link (start bytes `0x0564`, length, control, source/destination addresses, CRC stripping), Transport header, and Application request/response headers.
-- [ ] Correlates `ClientToServer` requests and `ServerToClient` responses by DNP3 Application Sequence number to emit `ProtocolTransactionRecord` RED Metrics, flagging error `IIN` bits (e.g., `DNP3_IIN_PARAM_ERR`, `DNP3_IIN_FUNC_NOT_SUPPORTED`) as `EXCEPTION` errors.
-- [ ] Dispatches object headers (Group, Variation, Qualifier/Range) through `Dnp3HandlerRegistry` to registered `IDnp3ObjectGroupHandler` services.
-- [ ] Decodes **Group 1** (Var 1 packed binary, Var 2 binary with flags), **Group 10** (Var 1 packed binary output, Var 2 binary output status with flags), **Group 20** (Var 1, 2, 5, 6 16/32-bit running counters with/without flags), and **Group 30** (Var 1–5 16/32-bit integer and 32-bit float analog inputs) into `ExtractedDataPointRecord` items with decoded quality flags (e.g., `ONLINE`, `RESTART`, `COMM_LOST`).
-- [ ] Verified by unit tests covering DNP3 framing, IIN error detection, and each static/counter Group and Variation handler.
+- [x] Parses DNP3 Data Link (start bytes `0x0564`, length, control, source/destination addresses, CRC stripping), Transport header, and Application request/response headers.
+- [x] Correlates `ClientToServer` requests and `ServerToClient` responses by DNP3 Application Sequence number to emit `ProtocolTransactionRecord` RED Metrics, flagging error `IIN` bits (e.g., `DNP3_IIN_PARAM_ERR`, `DNP3_IIN_FUNC_NOT_SUPPORTED`) as `EXCEPTION` errors.
+- [x] Dispatches object headers (Group, Variation, Qualifier/Range) through `Dnp3HandlerRegistry` to registered `IDnp3ObjectGroupHandler` services.
+- [x] Decodes **Group 1** (Var 1 packed binary, Var 2 binary with flags), **Group 10** (Var 1 packed binary output, Var 2 binary output status with flags), **Group 20** (Var 1, 2, 5, 6 16/32-bit running counters with/without flags), and **Group 30** (Var 1–5 16/32-bit integer and 32-bit float analog inputs) into `ExtractedDataPointRecord` items with decoded quality flags (e.g., `ONLINE`, `RESTART`, `COMM_LOST`).
+- [x] Verified by unit tests covering DNP3 framing, IIN error detection, and each static/counter Group and Variation handler.
 
