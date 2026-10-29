@@ -138,11 +138,23 @@ public class IngestionPipelineOrchestratorTests
 
         var orchestrator = new IngestionPipelineOrchestrator(frameSource, [decoder], dataSink);
 
-        await orchestrator.RunAsync(session, [pair], [tag], "synthetic.pcap");
+        var summary = await orchestrator.RunAsync(session, [pair], [tag], "synthetic.pcap");
 
         Assert.Equal(sessionId, dataSink.InitializedSession?.Id);
         Assert.True(dataSink.InitialStatesUpdated);
         Assert.Equal(SessionStatus.Completed, dataSink.CompletedStatus);
+
+        Assert.NotNull(summary);
+        Assert.Equal(6, summary.TotalFramesProcessed);
+        Assert.Equal(4, summary.MatchedFramesProcessed);
+        Assert.Equal(3, summary.TotalTransactions);
+        Assert.Equal(1, summary.SuccessTransactions);
+        Assert.Equal(2, summary.ErrorTransactions);
+        Assert.Equal(2, summary.TimeoutTransactions);
+        Assert.Equal(0, summary.ExceptionTransactions);
+        Assert.Equal(1, summary.DataPointsPersisted);
+        Assert.Equal(0, summary.CommandEventsPersisted);
+        Assert.Equal(0, summary.UnmappedRegistersPersisted);
 
         // Verify 3 RED transactions in exact order:
         // 1. TX-1 mid-stream TIMEOUT
@@ -178,6 +190,43 @@ public class IngestionPipelineOrchestratorTests
         Assert.Equal(138.0, dp.ScaledNumericValue!.Value, precision: 5);
         Assert.True(dp.IsValueChange);
         Assert.True(tagEngine.GetInitialStates().ContainsKey(tagId));
+    }
+
+    [Fact]
+    public async Task RunAsync_OnUnhandledException_MarksSessionFailedAndRethrows()
+    {
+        var sessionId = Guid.NewGuid();
+        var session = new TestSession(
+            Id: sessionId,
+            Name: "FaultySession",
+            PcapFileName: "faulty.pcap",
+            S3ObjectKey: null);
+
+        var dataSink = new InMemoryDataSink();
+        var failingFrameSource = new ThrowingFrameSource();
+        var orchestrator = new IngestionPipelineOrchestrator(failingFrameSource, [], dataSink);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            orchestrator.RunAsync(session, [], [], "faulty.pcap"));
+
+        Assert.Equal("Frame read exploded", ex.Message);
+        Assert.Equal(SessionStatus.Failed, dataSink.CompletedStatus);
+    }
+
+    private sealed class ThrowingFrameSource : IFrameSource
+    {
+        public async IAsyncEnumerable<DissectedFrame> ReadFramesAsync(
+            string pcapFilePath,
+            [EnumeratorCancellation] CancellationToken ct = default)
+        {
+            await Task.Yield();
+            if (!string.IsNullOrEmpty(pcapFilePath))
+            {
+                throw new InvalidOperationException("Frame read exploded");
+            }
+
+            yield break;
+        }
     }
 
     private sealed class SyntheticFrameSource(IReadOnlyList<DissectedFrame> frames) : IFrameSource

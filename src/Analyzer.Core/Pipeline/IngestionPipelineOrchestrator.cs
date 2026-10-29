@@ -38,7 +38,7 @@ public class IngestionPipelineOrchestrator
         }
     }
 
-    public async Task RunAsync(
+    public async Task<PipelineExecutionSummary> RunAsync(
         TestSession session,
         IReadOnlyList<DeviceEndpointPair> devicePairs,
         IReadOnlyList<TagDefinition> tags,
@@ -50,82 +50,155 @@ public class IngestionPipelineOrchestrator
         ArgumentNullException.ThrowIfNull(tags);
         ArgumentException.ThrowIfNullOrWhiteSpace(pcapFilePath);
 
-        await _dataSink.InitializeSessionAsync(session, devicePairs, tags, ct);
-
-        var transactions = new List<ProtocolTransactionRecord>();
-        var dataPoints = new List<ExtractedDataPointRecord>();
-        var commandEvents = new List<CapturedCommandEventRecord>();
-        var unmappedRegisters = new List<ModbusUnmappedRecord>();
-
-        DateTime lastVirtualTime = DateTime.UnixEpoch;
-
-        await foreach (var frame in _frameSource.ReadFramesAsync(pcapFilePath, ct))
+        try
         {
-            lastVirtualTime = frame.TimestampUtc;
+            await _dataSink.InitializeSessionAsync(session, devicePairs, tags, ct);
 
-            if (!TryMatchDevicePair(frame, devicePairs, out var matchedPair, out var direction))
-            {
-                continue;
-            }
+            var transactions = new List<ProtocolTransactionRecord>();
+            var dataPoints = new List<ExtractedDataPointRecord>();
+            var commandEvents = new List<CapturedCommandEventRecord>();
+            var unmappedRegisters = new List<ModbusUnmappedRecord>();
 
-            if (!_decodersByProtocol.TryGetValue(matchedPair.Protocol, out var decoder))
-            {
-                continue;
-            }
+            DateTime lastVirtualTime = DateTime.UnixEpoch;
+            long totalFrames = 0;
+            long matchedFrames = 0;
+            long totalTransactions = 0;
+            long successTransactions = 0;
+            long errorTransactions = 0;
+            long timeoutTransactions = 0;
+            long exceptionTransactions = 0;
+            long dataPointsPersisted = 0;
+            long commandEventsPersisted = 0;
+            long unmappedRegistersPersisted = 0;
 
-            foreach (var registeredDecoder in _decodersByProtocol.Values)
+            void TallyTransactions(IReadOnlyList<ProtocolTransactionRecord> txList)
             {
-                var expiredTimeouts = registeredDecoder.FlushExpiredTimeouts(frame.TimestampUtc, isEndOfFile: false);
-                if (expiredTimeouts.Count > 0)
+                for (int i = 0; i < txList.Count; i++)
                 {
-                    transactions.AddRange(expiredTimeouts);
+                    var tx = txList[i];
+                    totalTransactions++;
+                    if (tx.IsError)
+                    {
+                        errorTransactions++;
+                    }
+                    else
+                    {
+                        successTransactions++;
+                    }
+
+                    if (tx.ErrorType is TransactionErrorType.Timeout or TransactionErrorType.TimeoutAtEof)
+                    {
+                        timeoutTransactions++;
+                    }
+                    else if (tx.ErrorType == TransactionErrorType.Exception)
+                    {
+                        exceptionTransactions++;
+                    }
                 }
             }
 
-            var output = decoder.ProcessFrame(frame, matchedPair, direction);
-            if (output.Transactions.Count > 0)
+            await foreach (var frame in _frameSource.ReadFramesAsync(pcapFilePath, ct))
             {
-                transactions.AddRange(output.Transactions);
+                totalFrames++;
+                lastVirtualTime = frame.TimestampUtc;
+
+                if (!TryMatchDevicePair(frame, devicePairs, out var matchedPair, out var direction))
+                {
+                    continue;
+                }
+
+                matchedFrames++;
+
+                if (!_decodersByProtocol.TryGetValue(matchedPair.Protocol, out var decoder))
+                {
+                    continue;
+                }
+
+                foreach (var registeredDecoder in _decodersByProtocol.Values)
+                {
+                    var expiredTimeouts = registeredDecoder.FlushExpiredTimeouts(frame.TimestampUtc, isEndOfFile: false);
+                    if (expiredTimeouts.Count > 0)
+                    {
+                        transactions.AddRange(expiredTimeouts);
+                        TallyTransactions(expiredTimeouts);
+                    }
+                }
+
+                var output = decoder.ProcessFrame(frame, matchedPair, direction);
+                if (output.Transactions.Count > 0)
+                {
+                    transactions.AddRange(output.Transactions);
+                    TallyTransactions(output.Transactions);
+                }
+
+                if (output.DataPoints.Count > 0)
+                {
+                    dataPoints.AddRange(output.DataPoints);
+                    dataPointsPersisted += output.DataPoints.Count;
+                }
+
+                if (output.CommandEvents.Count > 0)
+                {
+                    commandEvents.AddRange(output.CommandEvents);
+                    commandEventsPersisted += output.CommandEvents.Count;
+                }
+
+                if (session.StoreUnmappedRegisters && output.UnmappedRegisters.Count > 0)
+                {
+                    unmappedRegisters.AddRange(output.UnmappedRegisters);
+                    unmappedRegistersPersisted += output.UnmappedRegisters.Count;
+                }
+
+                int totalBuffered = transactions.Count + dataPoints.Count + commandEvents.Count + unmappedRegisters.Count;
+                if (totalBuffered >= _batchSize)
+                {
+                    await FlushBatchAsync(transactions, dataPoints, commandEvents, unmappedRegisters, ct);
+                }
             }
 
-            if (output.DataPoints.Count > 0)
+            foreach (var decoder in _decodersByProtocol.Values)
             {
-                dataPoints.AddRange(output.DataPoints);
+                var eofTimeouts = decoder.FlushExpiredTimeouts(lastVirtualTime, isEndOfFile: true);
+                if (eofTimeouts.Count > 0)
+                {
+                    transactions.AddRange(eofTimeouts);
+                    TallyTransactions(eofTimeouts);
+                }
             }
 
-            if (output.CommandEvents.Count > 0)
-            {
-                commandEvents.AddRange(output.CommandEvents);
-            }
-
-            if (session.StoreUnmappedRegisters && output.UnmappedRegisters.Count > 0)
-            {
-                unmappedRegisters.AddRange(output.UnmappedRegisters);
-            }
-
-            int totalBuffered = transactions.Count + dataPoints.Count + commandEvents.Count + unmappedRegisters.Count;
-            if (totalBuffered >= _batchSize)
+            if (transactions.Count > 0 || dataPoints.Count > 0 || commandEvents.Count > 0 || unmappedRegisters.Count > 0)
             {
                 await FlushBatchAsync(transactions, dataPoints, commandEvents, unmappedRegisters, ct);
             }
-        }
 
-        foreach (var decoder in _decodersByProtocol.Values)
+            await _dataSink.UpdateTagInitialStatesAsync(session.Id, ct);
+            await _dataSink.CompleteSessionAsync(session.Id, SessionStatus.Completed, ct);
+
+            return new PipelineExecutionSummary(
+                TotalFramesProcessed: totalFrames,
+                MatchedFramesProcessed: matchedFrames,
+                TotalTransactions: totalTransactions,
+                SuccessTransactions: successTransactions,
+                ErrorTransactions: errorTransactions,
+                TimeoutTransactions: timeoutTransactions,
+                ExceptionTransactions: exceptionTransactions,
+                DataPointsPersisted: dataPointsPersisted,
+                CommandEventsPersisted: commandEventsPersisted,
+                UnmappedRegistersPersisted: unmappedRegistersPersisted);
+        }
+        catch (Exception)
         {
-            var eofTimeouts = decoder.FlushExpiredTimeouts(lastVirtualTime, isEndOfFile: true);
-            if (eofTimeouts.Count > 0)
+            try
             {
-                transactions.AddRange(eofTimeouts);
+                await _dataSink.CompleteSessionAsync(session.Id, SessionStatus.Failed, CancellationToken.None);
             }
-        }
+            catch
+            {
+                // Suppress secondary exception to preserve original exception
+            }
 
-        if (transactions.Count > 0 || dataPoints.Count > 0 || commandEvents.Count > 0 || unmappedRegisters.Count > 0)
-        {
-            await FlushBatchAsync(transactions, dataPoints, commandEvents, unmappedRegisters, ct);
+            throw;
         }
-
-        await _dataSink.UpdateTagInitialStatesAsync(session.Id, ct);
-        await _dataSink.CompleteSessionAsync(session.Id, SessionStatus.Completed, ct);
     }
 
     private async Task FlushBatchAsync(

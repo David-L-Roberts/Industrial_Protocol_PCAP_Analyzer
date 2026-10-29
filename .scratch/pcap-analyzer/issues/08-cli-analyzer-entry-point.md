@@ -10,8 +10,8 @@
 
 **Status:** ready-for-agent
 
-- [ ] Implements the `analyze` CLI command accepting `--manifest <path>`, `--db <conn_string>`, and optional `--s3-endpoint` / `--ndjson-input` arguments.
-- [ ] Registers all core engines, protocol decoders, DNP3 Phase 1 object group handlers, and infrastructure adapters via Dependency Injection.
-- [ ] Executes end-to-end session initialization, frame streaming, protocol decoding, timeout flushing, $T_0$ baseline population, and session completion, marking the session `FAILED` on unhandled errors.
-- [ ] Outputs a clear execution summary (total frames processed, RED transaction counts, timeouts/exceptions detected, data points and command events persisted) and returns non-zero exit code on failure.
+- [x] Implements the `analyze` CLI command accepting `--manifest <path>`, `--db <conn_string>`, and optional `--s3-endpoint` / `--ndjson-input` arguments.
+- [x] Registers all core engines, protocol decoders, DNP3 Phase 1 object group handlers, and infrastructure adapters via Dependency Injection.
+- [x] Executes end-to-end session initialization, frame streaming, protocol decoding, timeout flushing, $T_0$ baseline population, and session completion, marking the session `FAILED` on unhandled errors.
+- [x] Outputs a clear execution summary (total frames processed, RED transaction counts, timeouts/exceptions detected, data points and command events persisted) and returns non-zero exit code on failure.
 

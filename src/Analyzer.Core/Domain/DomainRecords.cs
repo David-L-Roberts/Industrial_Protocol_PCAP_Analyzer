@@ -294,3 +294,16 @@ public record ProtocolDecodeOutput(
     IReadOnlyList<CapturedCommandEventRecord> CommandEvents,
     IReadOnlyList<ModbusUnmappedRecord> UnmappedRegisters
 );
+
+public record PipelineExecutionSummary(
+    long TotalFramesProcessed,
+    long MatchedFramesProcessed,
+    long TotalTransactions,
+    long SuccessTransactions,
+    long ErrorTransactions,
+    long TimeoutTransactions,
+    long ExceptionTransactions,
+    long DataPointsPersisted,
+    long CommandEventsPersisted,
+    long UnmappedRegistersPersisted
+);

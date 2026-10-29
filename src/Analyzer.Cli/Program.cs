@@ -1,2 +1,3 @@
-Console.WriteLine("Industrial Protocol PCAP Analyzer CLI");
+using Analyzer.Cli;
 
+return await AnalyzerCliApp.RunAsync(args);
