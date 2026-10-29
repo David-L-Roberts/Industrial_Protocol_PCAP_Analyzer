@@ -651,6 +651,404 @@ public class Dnp3DecoderTests
         Assert.Equal(TransactionStatusCode.Timeout, timeoutTx.StatusCode);
     }
 
+    /// <summary>
+    /// Writes a 48-bit unsigned integer (milliseconds since Unix Epoch) in Little-Endian order into a 6-byte array.
+    /// </summary>
+    private static byte[] EncodeDnp3Timestamp48(DateTime utcTimestamp)
+    {
+        ulong epochMs = (ulong)new DateTimeOffset(utcTimestamp).ToUnixTimeMilliseconds();
+        byte[] bytes = new byte[6];
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(0, 4), (uint)(epochMs & 0xFFFF_FFFFUL));
+        BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(4, 2), (ushort)((epochMs >> 32) & 0xFFFFUL));
+        return bytes;
+    }
+
+    [Fact]
+    public void ProcessFrame_Group2BinaryInputEventVar1Var2Var3_DecodesDualTimestampsQualityFlagsAndStaticFallbackTags()
+    {
+        var g2v1Idx1Id = Guid.Parse("70000000-0000-0000-0000-000000000001");
+        var g2v2Idx4Id = Guid.Parse("70000000-0000-0000-0000-000000000002");
+        var g2v3Idx7Id = Guid.Parse("70000000-0000-0000-0000-000000000003");
+
+        var tags = new[]
+        {
+            // Mapped explicitly to G02V01:Idx1
+            new TagDefinition(g2v1Idx1Id, PairId, "Event_NoTime_1", ProtocolAddress.Parse("G02V01:Idx1"), TagDataType.Bool, 1.0, 0.0, null, null),
+            // Mapped via static Group 1 fallback G01V02:Idx4 (as in SPECIFICATION.md CSV example)
+            new TagDefinition(g2v2Idx4Id, PairId, "Relay_Trip_State", ProtocolAddress.Parse("G01V02:Idx4"), TagDataType.Bool, 1.0, 0.0, null, null),
+            // Mapped to G02V03:Idx7
+            new TagDefinition(g2v3Idx7Id, PairId, "Event_RelTime_7", ProtocolAddress.Parse("G02V03:Idx7"), TagDataType.Bool, 1.0, 0.0, null, null)
+        };
+
+        var redEngine = new VirtualClockRedEngine(timeoutThresholdMs: 2000);
+        var tagEngine = new TagResolutionEngine(tags);
+        var registry = new Dnp3HandlerRegistry([new Group2BinaryInputEventHandler(tagEngine)]);
+        var decoder = new Dnp3Decoder(redEngine, registry);
+        var pair = CreatePair(masterAddr: 1, outstationAddr: 100);
+
+        DateTime packetArrivalUtc = BaseTime.AddSeconds(10);
+        DateTime rtuEventUtc = BaseTime.AddSeconds(9).AddMilliseconds(876); // 124 ms before packet arrival
+        byte[] rtuTimeBytes = EncodeDnp3Timestamp48(rtuEventUtc);
+
+        // Unsolicited Response (FC = 0x82) or Solicited Response (FC = 0x81) containing:
+        // 1. G2V1 (without time, 1 byte): Qualifier 0x17 (1-byte index prefix, 8-bit count = 1), Index = 1, Flags = 0x81 (STATE=1, ONLINE)
+        // 2. G2V2 (with 48-bit absolute time, 7 bytes): Qualifier 0x17 (1-byte index prefix, 8-bit count = 1), Index = 4, Flags = 0x83 (STATE=1, ONLINE | RESTART), 6-byte timestamp
+        // 3. G2V3 (with 16-bit relative time, 3 bytes): Qualifier 0x28 (2-byte index prefix, 16-bit count = 1), Index = 7 (0x07, 0x00), Flags = 0x05 (STATE=0, ONLINE | COMM_LOST), RelTime = 250 ms (0xFA, 0x00)
+        byte[] appFragment =
+        [
+            0xD1, 0x82, 0x00, 0x00, // Unsolicited response FC = 0x82
+            // G2V1:
+            2, 1, 0x17, 0x01, 0x01, 0x81,
+            // G2V2:
+            2, 2, 0x17, 0x01, 0x04, 0x83,
+            rtuTimeBytes[0], rtuTimeBytes[1], rtuTimeBytes[2], rtuTimeBytes[3], rtuTimeBytes[4], rtuTimeBytes[5],
+            // G2V3:
+            2, 3, 0x28, 0x01, 0x00, 0x07, 0x00, 0x05, 0xFA, 0x00
+        ];
+
+        var output = decoder.ProcessFrame(
+            CreateFrame(10, packetArrivalUtc, TrafficDirection.ServerToClient, BuildDnp3LinkFrame(1, 100, 0xC0, appFragment)),
+            pair,
+            TrafficDirection.ServerToClient);
+
+        Assert.Equal(3, output.DataPoints.Count);
+
+        // 1. G2V1: EventTimestamp is null, PacketTimestamp is packetArrivalUtc
+        var dp0 = output.DataPoints[0];
+        Assert.Equal(g2v1Idx1Id, dp0.TagId);
+        Assert.Equal(packetArrivalUtc, dp0.PacketTimestamp);
+        Assert.Null(dp0.EventTimestamp);
+        Assert.True(dp0.BooleanValue);
+        Assert.Equal("81", dp0.RawHex);
+        Assert.Equal(PointQualityFlags.Online, dp0.QualityFlags);
+
+        // 2. G2V2: EventTimestamp is rtuEventUtc (48-bit DNP3 time), PacketTimestamp is packetArrivalUtc
+        var dp1 = output.DataPoints[1];
+        Assert.Equal(g2v2Idx4Id, dp1.TagId);
+        Assert.Equal(packetArrivalUtc, dp1.PacketTimestamp);
+        Assert.Equal(rtuEventUtc, dp1.EventTimestamp);
+        Assert.True(dp1.BooleanValue);
+        Assert.Equal(PointQualityFlags.Online | PointQualityFlags.Restart, dp1.QualityFlags);
+        Assert.Equal(14, dp1.RawHex.Length); // 7 bytes = 14 hex chars
+
+        // 3. G2V3: EventTimestamp is packetArrivalUtc + 250ms (relative time without preceding CTO), PacketTimestamp is packetArrivalUtc
+        var dp2 = output.DataPoints[2];
+        Assert.Equal(g2v3Idx7Id, dp2.TagId);
+        Assert.Equal(packetArrivalUtc, dp2.PacketTimestamp);
+        Assert.Equal(packetArrivalUtc.AddMilliseconds(250), dp2.EventTimestamp);
+        Assert.False(dp2.BooleanValue);
+        Assert.Equal("05FA00", dp2.RawHex);
+        Assert.Equal(PointQualityFlags.Online | PointQualityFlags.CommLost, dp2.QualityFlags);
+    }
+
+    [Fact]
+    public void ProcessFrame_Group22CounterChangeEventVar1Var2Var5Var6_DecodesCounterEventsWithAndWithoutTimestamps()
+    {
+        var g22v1Idx0Id = Guid.Parse("71000000-0000-0000-0000-000000000001");
+        var g22v2Idx1Id = Guid.Parse("71000000-0000-0000-0000-000000000002");
+        var g22v5Idx2Id = Guid.Parse("71000000-0000-0000-0000-000000000003");
+        var g22v6Idx3Id = Guid.Parse("71000000-0000-0000-0000-000000000004");
+
+        var tags = new[]
+        {
+            new TagDefinition(g22v1Idx0Id, PairId, "CntEvt_32_NoTime", ProtocolAddress.Parse("G22V01:Idx0"), TagDataType.Int32, 0.1, 0.0, "kWh", null),
+            new TagDefinition(g22v2Idx1Id, PairId, "CntEvt_16_NoTime", ProtocolAddress.Parse("G22V02:Idx1"), TagDataType.UInt16, 1.0, 0.0, "Counts", null),
+            // Mapped via static Group 20 fallback G20V01:Idx2
+            new TagDefinition(g22v5Idx2Id, PairId, "CntEvt_32_WithTime", ProtocolAddress.Parse("G20V01:Idx2"), TagDataType.Int32, 0.01, 0.0, "MWh", null),
+            new TagDefinition(g22v6Idx3Id, PairId, "CntEvt_16_WithTime", ProtocolAddress.Parse("G22V06:Idx3"), TagDataType.UInt16, 2.0, 10.0, "Counts", null)
+        };
+
+        var redEngine = new VirtualClockRedEngine(timeoutThresholdMs: 2000);
+        var tagEngine = new TagResolutionEngine(tags);
+        var registry = new Dnp3HandlerRegistry([new Group22CounterChangeEventHandler(tagEngine)]);
+        var decoder = new Dnp3Decoder(redEngine, registry);
+        var pair = CreatePair(masterAddr: 1, outstationAddr: 100);
+
+        DateTime packetArrivalUtc = BaseTime.AddSeconds(20);
+        DateTime eventTime5 = BaseTime.AddSeconds(19).AddMilliseconds(500);
+        DateTime eventTime6 = BaseTime.AddSeconds(19).AddMilliseconds(750);
+        byte[] t5Bytes = EncodeDnp3Timestamp48(eventTime5);
+        byte[] t6Bytes = EncodeDnp3Timestamp48(eventTime6);
+
+        // 1. G22V1 (32-bit counter event without time, 5 bytes): Qualifier 0x17, Count = 1, Index = 0, Flags = 0x01 (Online), Value = 200000 (0x00030D40 -> 40 0D 03 00) -> Scaled = 20000.0
+        // 2. G22V2 (16-bit counter event without time, 3 bytes): Qualifier 0x17, Count = 1, Index = 1, Flags = 0x21 (Online | ChatterFilter/Rollover), Value = 40000 (0x9C40 -> 40 9C) -> Scaled = 40000.0
+        // 3. G22V5 (32-bit counter event with 48-bit time, 11 bytes): Qualifier 0x17, Count = 1, Index = 2, Flags = 0x01 (Online), Value = 900000 (0x000DBBA0 -> A0 BB 0D 00), Time = eventTime5 -> Scaled = 9000.0
+        // 4. G22V6 (16-bit counter event with 48-bit time, 9 bytes): Qualifier 0x17, Count = 1, Index = 3, Flags = 0x03 (Online | Restart), Value = 1500 (0x05DC -> DC 05), Time = eventTime6 -> Scaled = 3010.0
+        byte[] appFragment =
+        [
+            0xD2, 0x82, 0x00, 0x00,
+            // G22V1:
+            22, 1, 0x17, 0x01, 0x00, 0x01, 0x40, 0x0D, 0x03, 0x00,
+            // G22V2:
+            22, 2, 0x17, 0x01, 0x01, 0x21, 0x40, 0x9C,
+            // G22V5:
+            22, 5, 0x17, 0x01, 0x02, 0x01, 0xA0, 0xBB, 0x0D, 0x00,
+            t5Bytes[0], t5Bytes[1], t5Bytes[2], t5Bytes[3], t5Bytes[4], t5Bytes[5],
+            // G22V6:
+            22, 6, 0x17, 0x01, 0x03, 0x03, 0xDC, 0x05,
+            t6Bytes[0], t6Bytes[1], t6Bytes[2], t6Bytes[3], t6Bytes[4], t6Bytes[5]
+        ];
+
+        var output = decoder.ProcessFrame(
+            CreateFrame(20, packetArrivalUtc, TrafficDirection.ServerToClient, BuildDnp3LinkFrame(1, 100, 0xC0, appFragment)),
+            pair,
+            TrafficDirection.ServerToClient);
+
+        Assert.Equal(4, output.DataPoints.Count);
+
+        // 1. G22V1
+        var dp0 = output.DataPoints[0];
+        Assert.Equal(g22v1Idx0Id, dp0.TagId);
+        Assert.Equal(packetArrivalUtc, dp0.PacketTimestamp);
+        Assert.Null(dp0.EventTimestamp);
+        Assert.Equal(200000.0, dp0.UnscaledNumericValue);
+        Assert.Equal(20000.0, dp0.ScaledNumericValue!.Value, precision: 5);
+        Assert.Equal("01400D0300", dp0.RawHex);
+        Assert.Equal(PointQualityFlags.Online, dp0.QualityFlags);
+
+        // 2. G22V2
+        var dp1 = output.DataPoints[1];
+        Assert.Equal(g22v2Idx1Id, dp1.TagId);
+        Assert.Equal(packetArrivalUtc, dp1.PacketTimestamp);
+        Assert.Null(dp1.EventTimestamp);
+        Assert.Equal(40000.0, dp1.UnscaledNumericValue);
+        Assert.Equal(40000.0, dp1.ScaledNumericValue!.Value, precision: 5);
+        Assert.Equal("21409C", dp1.RawHex);
+        Assert.Equal(PointQualityFlags.Online | PointQualityFlags.ChatterFilter, dp1.QualityFlags);
+
+        // 3. G22V5
+        var dp2 = output.DataPoints[2];
+        Assert.Equal(g22v5Idx2Id, dp2.TagId);
+        Assert.Equal(packetArrivalUtc, dp2.PacketTimestamp);
+        Assert.Equal(eventTime5, dp2.EventTimestamp);
+        Assert.Equal(900000.0, dp2.UnscaledNumericValue);
+        Assert.Equal(9000.0, dp2.ScaledNumericValue!.Value, precision: 5);
+        Assert.Equal(22, dp2.RawHex.Length); // 11 bytes = 22 hex chars
+        Assert.Equal(PointQualityFlags.Online, dp2.QualityFlags);
+
+        // 4. G22V6
+        var dp3 = output.DataPoints[3];
+        Assert.Equal(g22v6Idx3Id, dp3.TagId);
+        Assert.Equal(packetArrivalUtc, dp3.PacketTimestamp);
+        Assert.Equal(eventTime6, dp3.EventTimestamp);
+        Assert.Equal(1500.0, dp3.UnscaledNumericValue);
+        Assert.Equal(3010.0, dp3.ScaledNumericValue!.Value, precision: 5);
+        Assert.Equal(18, dp3.RawHex.Length); // 9 bytes = 18 hex chars
+        Assert.Equal(PointQualityFlags.Online | PointQualityFlags.Restart, dp3.QualityFlags);
+    }
+
+    [Fact]
+    public void ProcessFrame_Group32AnalogInputEventVar1Var2Var3Var4Var5Var7_DecodesInt16Int32Float32EventsWithAndWithoutTimestamps()
+    {
+        var g32v1Idx0Id = Guid.Parse("72000000-0000-0000-0000-000000000001");
+        var g32v2Idx0Id = Guid.Parse("72000000-0000-0000-0000-000000000002");
+        var g32v3Idx1Id = Guid.Parse("72000000-0000-0000-0000-000000000003");
+        var g32v4Idx2Id = Guid.Parse("72000000-0000-0000-0000-000000000004");
+        var g32v5Idx3Id = Guid.Parse("72000000-0000-0000-0000-000000000005");
+        var g32v7Idx4Id = Guid.Parse("72000000-0000-0000-0000-000000000006");
+
+        var tags = new[]
+        {
+            new TagDefinition(g32v1Idx0Id, PairId, "AiEvt_32_NoTime", ProtocolAddress.Parse("G32V01:Idx0"), TagDataType.Int32, 0.1, 0.0, "kW", null),
+            // Mapped via static Group 30 fallback G30V02:Idx0 (as in SPECIFICATION.md CSV example)
+            new TagDefinition(g32v2Idx0Id, PairId, "Feeder_MW", ProtocolAddress.Parse("G30V02:Idx0"), TagDataType.Int16, 0.01, 0.0, "MW", null),
+            new TagDefinition(g32v3Idx1Id, PairId, "AiEvt_32_WithTime", ProtocolAddress.Parse("G32V03:Idx1"), TagDataType.Int32, 0.5, 0.0, "kW", null),
+            new TagDefinition(g32v4Idx2Id, PairId, "AiEvt_16_WithTime", ProtocolAddress.Parse("G32V04:Idx2"), TagDataType.Int16, 0.1, 5.0, "C", null),
+            new TagDefinition(g32v5Idx3Id, PairId, "AiEvt_Float_NoTime", ProtocolAddress.Parse("G32V05:Idx3"), TagDataType.Float32Be, 2.0, 0.0, "A", null),
+            new TagDefinition(g32v7Idx4Id, PairId, "AiEvt_Float_WithTime", ProtocolAddress.Parse("G32V07:Idx4"), TagDataType.Float32Be, 1.0, 0.0, "Hz", null)
+        };
+
+        var redEngine = new VirtualClockRedEngine(timeoutThresholdMs: 2000);
+        var tagEngine = new TagResolutionEngine(tags);
+        var registry = new Dnp3HandlerRegistry([new Group32AnalogInputEventHandler(tagEngine)]);
+        var decoder = new Dnp3Decoder(redEngine, registry);
+        var pair = CreatePair(masterAddr: 1, outstationAddr: 100);
+
+        DateTime packetArrivalUtc = BaseTime.AddSeconds(30);
+        DateTime eventTime3 = BaseTime.AddSeconds(29).AddMilliseconds(100);
+        DateTime eventTime4 = BaseTime.AddSeconds(29).AddMilliseconds(200);
+        DateTime eventTime7 = BaseTime.AddSeconds(29).AddMilliseconds(300);
+        byte[] t3Bytes = EncodeDnp3Timestamp48(eventTime3);
+        byte[] t4Bytes = EncodeDnp3Timestamp48(eventTime4);
+        byte[] t7Bytes = EncodeDnp3Timestamp48(eventTime7);
+
+        // 1. G32V1 (32-bit signed int without time, 5 bytes): Qualifier 0x17, Count=1, Index=0, Flags=0x01 (Online), Value=-50000 (0xFFFF3CB0 -> B0 3C FF FF) -> Scaled = -5000.0
+        // 2. G32V2 (16-bit signed int without time, 3 bytes): Qualifier 0x17, Count=1, Index=0, Flags=0x41 (Online | OverRange), Value=1250 (0x04E2 -> E2 04) -> Scaled = 12.5
+        // 3. G32V3 (32-bit signed int with 48-bit time, 11 bytes): Qualifier 0x17, Count=1, Index=1, Flags=0x01 (Online), Value=40000 (0x00009C40 -> 40 9C 00 00), Time=eventTime3 -> Scaled = 20000.0
+        // 4. G32V4 (16-bit signed int with 48-bit time, 9 bytes): Qualifier 0x17, Count=1, Index=2, Flags=0x81 (Online | ReferenceErr), Value=-150 (0xFF6A -> 6A FF), Time=eventTime4 -> Scaled = -10.0
+        // 5. G32V5 (32-bit float without time, 5 bytes): Qualifier 0x17, Count=1, Index=3, Flags=0x01 (Online), Value=12.5f (0x41480000 -> LE: 00 00 48 41) -> Scaled = 25.0
+        // 6. G32V7 (32-bit float with 48-bit time, 11 bytes): Qualifier 0x17, Count=1, Index=4, Flags=0x01 (Online), Value=60.5f (0x42720000 -> LE: 00 00 72 42), Time=eventTime7 -> Scaled = 60.5
+        byte[] appFragment =
+        [
+            0xD3, 0x82, 0x00, 0x00,
+            // G32V1:
+            32, 1, 0x17, 0x01, 0x00, 0x01, 0xB0, 0x3C, 0xFF, 0xFF,
+            // G32V2:
+            32, 2, 0x17, 0x01, 0x00, 0x41, 0xE2, 0x04,
+            // G32V3:
+            32, 3, 0x17, 0x01, 0x01, 0x01, 0x40, 0x9C, 0x00, 0x00,
+            t3Bytes[0], t3Bytes[1], t3Bytes[2], t3Bytes[3], t3Bytes[4], t3Bytes[5],
+            // G32V4:
+            32, 4, 0x17, 0x01, 0x02, 0x81, 0x6A, 0xFF,
+            t4Bytes[0], t4Bytes[1], t4Bytes[2], t4Bytes[3], t4Bytes[4], t4Bytes[5],
+            // G32V5:
+            32, 5, 0x17, 0x01, 0x03, 0x01, 0x00, 0x00, 0x48, 0x41,
+            // G32V7:
+            32, 7, 0x17, 0x01, 0x04, 0x01, 0x00, 0x00, 0x72, 0x42,
+            t7Bytes[0], t7Bytes[1], t7Bytes[2], t7Bytes[3], t7Bytes[4], t7Bytes[5]
+        ];
+
+        var output = decoder.ProcessFrame(
+            CreateFrame(30, packetArrivalUtc, TrafficDirection.ServerToClient, BuildDnp3LinkFrame(1, 100, 0xC0, appFragment)),
+            pair,
+            TrafficDirection.ServerToClient);
+
+        Assert.Equal(6, output.DataPoints.Count);
+
+        // 1. G32V1
+        Assert.Equal(g32v1Idx0Id, output.DataPoints[0].TagId);
+        Assert.Equal(packetArrivalUtc, output.DataPoints[0].PacketTimestamp);
+        Assert.Null(output.DataPoints[0].EventTimestamp);
+        Assert.Equal(-50000.0, output.DataPoints[0].UnscaledNumericValue);
+        Assert.Equal(-5000.0, output.DataPoints[0].ScaledNumericValue!.Value, precision: 5);
+        Assert.Equal("01B03CFFFF", output.DataPoints[0].RawHex);
+
+        // 2. G32V2 (resolved via G30V02:Idx0 fallback)
+        Assert.Equal(g32v2Idx0Id, output.DataPoints[1].TagId);
+        Assert.Null(output.DataPoints[1].EventTimestamp);
+        Assert.Equal(1250.0, output.DataPoints[1].UnscaledNumericValue);
+        Assert.Equal(12.5, output.DataPoints[1].ScaledNumericValue!.Value, precision: 5);
+        Assert.Equal(PointQualityFlags.Online | PointQualityFlags.OverRange, output.DataPoints[1].QualityFlags);
+
+        // 3. G32V3
+        Assert.Equal(g32v3Idx1Id, output.DataPoints[2].TagId);
+        Assert.Equal(eventTime3, output.DataPoints[2].EventTimestamp);
+        Assert.Equal(40000.0, output.DataPoints[2].UnscaledNumericValue);
+        Assert.Equal(20000.0, output.DataPoints[2].ScaledNumericValue!.Value, precision: 5);
+        Assert.Equal(22, output.DataPoints[2].RawHex.Length);
+
+        // 4. G32V4
+        Assert.Equal(g32v4Idx2Id, output.DataPoints[3].TagId);
+        Assert.Equal(eventTime4, output.DataPoints[3].EventTimestamp);
+        Assert.Equal(-150.0, output.DataPoints[3].UnscaledNumericValue);
+        Assert.Equal(-10.0, output.DataPoints[3].ScaledNumericValue!.Value, precision: 5);
+        Assert.Equal(PointQualityFlags.Online | PointQualityFlags.ReferenceErr, output.DataPoints[3].QualityFlags);
+        Assert.Equal(18, output.DataPoints[3].RawHex.Length);
+
+        // 5. G32V5
+        Assert.Equal(g32v5Idx3Id, output.DataPoints[4].TagId);
+        Assert.Null(output.DataPoints[4].EventTimestamp);
+        Assert.Equal(12.5, output.DataPoints[4].UnscaledNumericValue!.Value, precision: 5);
+        Assert.Equal(25.0, output.DataPoints[4].ScaledNumericValue!.Value, precision: 5);
+        Assert.Equal("0100004841", output.DataPoints[4].RawHex);
+
+        // 6. G32V7
+        Assert.Equal(g32v7Idx4Id, output.DataPoints[5].TagId);
+        Assert.Equal(eventTime7, output.DataPoints[5].EventTimestamp);
+        Assert.Equal(60.5, output.DataPoints[5].UnscaledNumericValue!.Value, precision: 5);
+        Assert.Equal(60.5, output.DataPoints[5].ScaledNumericValue!.Value, precision: 5);
+        Assert.Equal(22, output.DataPoints[5].RawHex.Length);
+    }
+
+    [Theory]
+    [InlineData(0x03, CommandType.Dnp3CrobSelect, 0x01, Dnp3ControlAction.PulseOn, true)]
+    [InlineData(0x04, CommandType.Dnp3CrobOperate, 0x02, Dnp3ControlAction.PulseOff, false)]
+    [InlineData(0x05, CommandType.Dnp3DirectOperate, 0x03, Dnp3ControlAction.LatchOn, true)]
+    [InlineData(0x05, CommandType.Dnp3DirectOperate, 0x04, Dnp3ControlAction.LatchOff, false)]
+    [InlineData(0x03, CommandType.Dnp3CrobSelect, 0x81, Dnp3ControlAction.Trip, false)]
+    [InlineData(0x04, CommandType.Dnp3CrobOperate, 0x41, Dnp3ControlAction.Close, true)]
+    public void ProcessFrame_Group12Var1CrobControlCommands_EmitsCapturedCommandEventProjectsMappedTagAndCorrelatesResponse(
+        byte functionCode,
+        CommandType expectedCommandType,
+        byte controlCodeByte,
+        Dnp3ControlAction expectedControlAction,
+        bool expectedBooleanState)
+    {
+        var crobTagId = Guid.Parse("73000000-0000-0000-0000-000000000001");
+        var tags = new[]
+        {
+            new TagDefinition(crobTagId, PairId, "Breaker_Trip_Cmd", ProtocolAddress.Parse("G12V01:Idx2"), TagDataType.Bool, 1.0, 0.0, null, "CROB Control Point")
+        };
+
+        var redEngine = new VirtualClockRedEngine(timeoutThresholdMs: 2000);
+        var tagEngine = new TagResolutionEngine(tags);
+        var registry = new Dnp3HandlerRegistry([new Group12CrobControlHandler(tagEngine)]);
+        var decoder = new Dnp3Decoder(redEngine, registry);
+        var pair = CreatePair(masterAddr: 1, outstationAddr: 100);
+
+        // Build 11-byte CROB (Group 12 Var 1):
+        // Qualifier = 0x17 (1-byte index prefix, 8-bit count = 1), Index = 2
+        // ControlCode = controlCodeByte
+        // Count = 3
+        // OnTime = 500 ms (0x000001F4 -> F4 01 00 00)
+        // OffTime = 1000 ms (0x000003E8 -> E8 03 00 00)
+        // Status = 0x00
+        byte[] appRequest =
+        [
+            0xC8, functionCode, // AppControl SEQ=8, FC = Select(3) / Operate(4) / DirectOperate(5)
+            12, 1, 0x17, 0x01, 0x02,
+            controlCodeByte,
+            0x03,
+            0xF4, 0x01, 0x00, 0x00,
+            0xE8, 0x03, 0x00, 0x00,
+            0x00
+        ];
+
+        byte[] reqFrameBytes = BuildDnp3LinkFrame(100, 1, 0xC0, appRequest);
+        var reqOutput = decoder.ProcessFrame(
+            CreateFrame(40, BaseTime, TrafficDirection.ClientToServer, reqFrameBytes),
+            pair,
+            TrafficDirection.ClientToServer);
+
+        Assert.Empty(reqOutput.Transactions);
+        var cmd = Assert.Single(reqOutput.CommandEvents);
+        Assert.Equal(BaseTime, cmd.Timestamp);
+        Assert.Equal(SessionId, cmd.SessionId);
+        Assert.Equal(PairId, cmd.DevicePairId);
+        Assert.Equal(40, cmd.FrameNumber);
+        Assert.Equal(TrafficDirection.ClientToServer, cmd.Direction);
+        Assert.Equal(ProtocolType.Dnp3, cmd.Protocol);
+        Assert.Equal(functionCode, cmd.FunctionCode);
+        Assert.Equal(expectedCommandType, cmd.CommandType);
+        Assert.Equal(ProtocolAddress.Parse("G12V01:Idx2"), cmd.TargetAddress);
+        Assert.Equal(expectedControlAction, cmd.ControlAction);
+        Assert.Equal((short)3, cmd.CommandCount);
+        Assert.Equal(500L, cmd.PulseOnMs);
+        Assert.Equal(1000L, cmd.PulseOffMs);
+        Assert.Equal(expectedBooleanState ? 1.0 : 0.0, cmd.UnscaledCommandValue);
+        Assert.Equal(reqFrameBytes, cmd.RawPduBytes);
+
+        // Verify mapped G12V01:Idx2 tag point is projected
+        var dp = Assert.Single(reqOutput.DataPoints);
+        Assert.Equal(crobTagId, dp.TagId);
+        Assert.Equal(TrafficDirection.ClientToServer, dp.Direction);
+        Assert.Equal(expectedBooleanState, dp.BooleanValue);
+
+        // Outstation echoes CROB in Response (ServerToClient, FC = 0x81, SEQ = 8) at T + 16ms:
+        // Must correlate RED transaction and NOT emit duplicate command event on ServerToClient response!
+        byte[] appResponse =
+        [
+            0xC8, 0x81, 0x00, 0x00,
+            12, 1, 0x17, 0x01, 0x02,
+            controlCodeByte,
+            0x03,
+            0xF4, 0x01, 0x00, 0x00,
+            0xE8, 0x03, 0x00, 0x00,
+            0x00
+        ];
+
+        var respOutput = decoder.ProcessFrame(
+            CreateFrame(41, BaseTime.AddMilliseconds(16), TrafficDirection.ServerToClient, BuildDnp3LinkFrame(1, 100, 0xC0, appResponse)),
+            pair,
+            TrafficDirection.ServerToClient);
+
+        var tx = Assert.Single(respOutput.Transactions);
+        Assert.Equal("8", tx.TransactionId);
+        Assert.Equal(16.0, tx.DurationMs!.Value, precision: 5);
+        Assert.False(tx.IsError);
+        Assert.Empty(respOutput.CommandEvents);
+    }
+
     private sealed class RecordingObjectGroupHandler(ushort group) : Analyzer.Core.Interfaces.IDnp3ObjectGroupHandler
     {
         public ushort Group { get; } = group;

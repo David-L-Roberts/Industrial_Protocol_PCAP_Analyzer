@@ -152,6 +152,14 @@ internal static class Dnp3ObjectAddressing
     public static PointQualityFlags DecodeAnalogQualityFlags(byte rawFlags) =>
         (PointQualityFlags)(rawFlags & 0xFF);
 
+    public static DateTime DecodeDnp3Timestamp48(ReadOnlySpan<byte> sixBytes)
+    {
+        uint low32 = BinaryPrimitives.ReadUInt32LittleEndian(sixBytes[..4]);
+        ushort high16 = BinaryPrimitives.ReadUInt16LittleEndian(sixBytes.Slice(4, 2));
+        long epochMs = (long)(((ulong)high16 << 32) | low32);
+        return DateTimeOffset.FromUnixTimeMilliseconds(epochMs).UtcDateTime;
+    }
+
     public static void ProjectPointIfMapped(
         in Dnp3PointContext context,
         int index,
@@ -200,6 +208,55 @@ internal static class Dnp3ObjectAddressing
     }
 
     public static bool TryFindMappedTag(
+        TagResolutionEngine tagEngine,
+        Guid devicePairId,
+        ushort group,
+        ushort variation,
+        int index,
+        out TagDefinition tag)
+    {
+        if (TryLookupGroupVariationCandidates(tagEngine, devicePairId, group, variation, index, out tag))
+        {
+            return true;
+        }
+
+        // Event-to-Static group fallback (e.g. G2 -> G1, G22 -> G20, G32 -> G30)
+        ushort? staticFallbackGroup = group switch
+        {
+            2 => 1,
+            22 => 20,
+            32 => 30,
+            _ => null
+        };
+
+        if (staticFallbackGroup.HasValue)
+        {
+            foreach (ushort candidateVar in GetFallbackStaticVariations(staticFallbackGroup.Value, variation))
+            {
+                if (TryLookupGroupVariationCandidates(tagEngine, devicePairId, staticFallbackGroup.Value, candidateVar, index, out tag))
+                {
+                    return true;
+                }
+            }
+        }
+
+        tag = default!;
+        return false;
+    }
+
+    private static ReadOnlySpan<ushort> GetFallbackStaticVariations(ushort staticGroup, ushort eventVariation) =>
+        (staticGroup, eventVariation) switch
+        {
+            (1, _) => [2, 1],
+            (20, 1 or 5) => [1, 5, 2, 6],
+            (20, 2 or 6) => [2, 6, 1, 5],
+            (30, 1 or 3) => [1, 3, 2, 4, 5],
+            (30, 2 or 4) => [2, 4, 1, 3, 5],
+            (30, 5 or 7) => [5, 1, 2, 3, 4],
+            _ => [1, 2]
+        };
+
+    private static bool TryLookupGroupVariationCandidates(
         TagResolutionEngine tagEngine,
         Guid devicePairId,
         ushort group,

@@ -172,7 +172,7 @@ public class Dnp3Decoder : IProtocolDecoder
     private static bool IsPayloadBearingClientFunction(byte functionCode) =>
         functionCode is 0x02 or 0x03 or 0x04 or 0x05 or 0x06; // Write, Select, Operate, DirectOperate, DirectOperateNoAck
 
-    private static bool TryStripDataLinkAndTransport(
+    public static bool TryStripDataLinkAndTransport(
         ReadOnlySpan<byte> payload,
         out ushort destinationAddress,
         out ushort sourceAddress,
