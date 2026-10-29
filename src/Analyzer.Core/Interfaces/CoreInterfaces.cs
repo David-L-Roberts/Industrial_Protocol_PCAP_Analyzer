@@ -37,3 +37,12 @@ public interface IDataSink
     Task UpdateTagInitialStatesAsync(Guid sessionId, CancellationToken ct);
     Task CompleteSessionAsync(Guid sessionId, SessionStatus status, CancellationToken ct);
 }
+
+public interface IPcapArchiveStorage
+{
+    /// <summary>
+    /// Archives the raw PCAP file for a test session and returns the object key it was stored under
+    /// (persisted as <c>test_sessions.s3_object_key</c>).
+    /// </summary>
+    Task<string> ArchivePcapAsync(Guid sessionId, string pcapFilePath, CancellationToken ct);
+}

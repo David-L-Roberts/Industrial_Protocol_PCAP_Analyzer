@@ -6,9 +6,9 @@
 
 **Status:** ready-for-agent
 
-- [ ] Implements `IDataSink.InitializeSessionAsync` to insert session metadata, device pairs, and tag definitions inside a transaction.
-- [ ] Implements `IDataSink.WriteBatchAsync` using `NpgsqlBinaryImporter` (`COPY ... FROM STDIN (FORMAT BINARY)`) in bounded batches (default 5,000 rows) for `red_transactions`, `tag_values`, `captured_command_events`, and `modbus_raw_unmapped`.
-- [ ] Implements `IDataSink.UpdateTagInitialStatesAsync` and `CompleteSessionAsync` to persist captured $T_0$ initial tag values (`initial_unscaled_numeric_value`, `initial_scaled_numeric_value`, `initial_boolean_value`, `initial_raw_hex`) and update `test_sessions.status`.
-- [ ] Implements `MinioPcapStorageService` to upload raw PCAP files to a configured S3/MinIO bucket and return the `s3_object_key`.
-- [ ] Verified by unit tests validating batch buffering, column mapping, and storage key generation without requiring a live database in the unit test suite.
+- [x] Implements `IDataSink.InitializeSessionAsync` to insert session metadata, device pairs, and tag definitions inside a transaction.
+- [x] Implements `IDataSink.WriteBatchAsync` using `NpgsqlBinaryImporter` (`COPY ... FROM STDIN (FORMAT BINARY)`) in bounded batches (default 5,000 rows) for `red_transactions`, `tag_values`, `captured_command_events`, and `modbus_raw_unmapped`.
+- [x] Implements `IDataSink.UpdateTagInitialStatesAsync` and `CompleteSessionAsync` to persist captured $T_0$ initial tag values (`initial_unscaled_numeric_value`, `initial_scaled_numeric_value`, `initial_boolean_value`, `initial_raw_hex`) and update `test_sessions.status`.
+- [x] Implements `MinioPcapStorageService` to upload raw PCAP files to a configured S3/MinIO bucket and return the `s3_object_key`.
+- [x] Verified by unit tests validating batch buffering, column mapping, and storage key generation without requiring a live database in the unit test suite.
 
