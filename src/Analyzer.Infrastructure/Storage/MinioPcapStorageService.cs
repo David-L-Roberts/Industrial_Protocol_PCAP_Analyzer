@@ -67,7 +67,7 @@ public sealed class MinioPcapStorageService : IPcapArchiveStorage
     {
     }
 
-    private static IMinioClient BuildMinioClient(MinioStorageOptions options)
+    public static IMinioClient BuildMinioClient(MinioStorageOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.Endpoint);

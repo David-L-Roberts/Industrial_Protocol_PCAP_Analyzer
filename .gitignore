@@ -70,6 +70,7 @@ publish/
 # Environment & Local Configuration
 .env
 .env.*
+!.env.example
 appsettings.Development.local.json
 appsettings.Local.json
 
@@ -78,9 +79,9 @@ appsettings.Local.json
 *.pcapng
 *.cap
 *.ndjson
-!tests/**/Fixtures/*.pcap
-!tests/**/Fixtures/*.pcapng
-!tests/**/Fixtures/*.ndjson
+!tests/**/Fixtures/**/*.pcap
+!tests/**/Fixtures/**/*.pcapng
+!tests/**/Fixtures/**/*.ndjson
 
 # OS generated files
 .DS_Store

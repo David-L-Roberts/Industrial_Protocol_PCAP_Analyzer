@@ -4,10 +4,10 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Plain `dotnet test` auto-skips all live integration tests while continuing to run all self-contained unit tests without requiring `.env`, `tshark`, TimescaleDB, or MinIO.
-- [ ] Running `dotnet test --settings integration.runsettings` enables the integration test suite and executes live infrastructure tests.
-- [ ] Tracked `.env.example` provides default test environment settings (`POSTGRES_*`, `MINIO_*`, `TSHARK_PATH`) aligned with `docker-compose.yml`, while untracked `.env` overrides them when present.
-- [ ] Live smoke tests verify connectivity to TimescaleDB, MinIO, and the `tshark` executable, failing with clear diagnostic messages if any service or binary is unavailable.
+- [x] Plain `dotnet test` auto-skips all live integration tests while continuing to run all self-contained unit tests without requiring `.env`, `tshark`, TimescaleDB, or MinIO.
+- [x] Running `dotnet test --settings integration.runsettings` enables the integration test suite and executes live infrastructure tests.
+- [x] Tracked `.env.example` provides default test environment settings (`POSTGRES_*`, `MINIO_*`, `TSHARK_PATH`) aligned with `docker-compose.yml`, while untracked `.env` overrides them when present.
+- [x] Live smoke tests verify connectivity to TimescaleDB, MinIO, and the `tshark` executable, failing with clear diagnostic messages if any service or binary is unavailable.
 
