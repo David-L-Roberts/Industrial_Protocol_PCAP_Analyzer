@@ -1,6 +1,6 @@
 services:
   timescaledb:
-    image: timescale/timescaledb-ha:pg16
+    image: timescale/timescaledb:latest-pg15
     container_name: protocol_analyzer_timescaledb
     restart: unless-stopped
     environment:
