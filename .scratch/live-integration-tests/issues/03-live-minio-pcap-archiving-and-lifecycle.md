@@ -4,9 +4,9 @@
 
 **Blocked by:** 01: Integration Test Harness, `.env` Configuration & Live Infrastructure Smoke Slice
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Archives a real capture file to the live MinIO server for a unique `TestSession` ID, ensuring the target bucket is created if it does not already exist.
-- [ ] Verifies via the MinIO client that the uploaded object exists under `captures/<sessionId>/<fileName>` with a byte length matching the source file on disk and the expected content type.
-- [ ] Automatically deletes the uploaded test object from MinIO during test teardown (`DisposeAsync`) unless `KEEP_TEST_DATA=true` is set.
+- [x] Archives a real capture file to the live MinIO server for a unique `TestSession` ID, ensuring the target bucket is created if it does not already exist.
+- [x] Verifies via the MinIO client that the uploaded object exists under `captures/<sessionId>/<fileName>` with a byte length matching the source file on disk and the expected content type.
+- [x] Automatically deletes the uploaded test object from MinIO during test teardown (`DisposeAsync`) unless `KEEP_TEST_DATA=true` is set.
 
