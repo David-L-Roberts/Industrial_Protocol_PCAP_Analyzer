@@ -4,10 +4,10 @@
 
 **Blocked by:** 01: Integration Test Harness, `.env` Configuration & Live Infrastructure Smoke Slice
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Persists a `TestSession`, `DeviceEndpointPair` records, and `TagDefinition` records to the live TimescaleDB instance and verifies stored column values via SQL queries.
-- [ ] Writes `ProtocolDecodeOutput` batches via binary `COPY` into `red_transactions`, `tag_values`, `captured_command_events`, and `modbus_raw_unmapped` hypertables without type or constraint errors.
-- [ ] Updates $T_0$ Initial States (`initial_unscaled_numeric_value`, `initial_scaled_numeric_value`, `initial_boolean_value`, `initial_raw_hex`) on `tag_definitions` and transitions the `TestSession` status to `COMPLETED` or `FAILED`.
-- [ ] Automatically cleans up each test's `TestSession` and all cascading hypertable rows in `DisposeAsync` using `SELECT delete_test_session(@sessionId)` unless `KEEP_TEST_DATA=true` is set.
+- [x] Persists a `TestSession`, `DeviceEndpointPair` records, and `TagDefinition` records to the live TimescaleDB instance and verifies stored column values via SQL queries.
+- [x] Writes `ProtocolDecodeOutput` batches via binary `COPY` into `red_transactions`, `tag_values`, `captured_command_events`, and `modbus_raw_unmapped` hypertables without type or constraint errors.
+- [x] Updates $T_0$ Initial States (`initial_unscaled_numeric_value`, `initial_scaled_numeric_value`, `initial_boolean_value`, `initial_raw_hex`) on `tag_definitions` and transitions the `TestSession` status to `COMPLETED` or `FAILED`.
+- [x] Automatically cleans up each test's `TestSession` and all cascading hypertable rows in `DisposeAsync` using `SELECT delete_test_session(@sessionId)` unless `KEEP_TEST_DATA=true` is set.
 
