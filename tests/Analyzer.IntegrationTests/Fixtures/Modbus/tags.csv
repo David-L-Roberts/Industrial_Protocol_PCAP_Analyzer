@@ -1,0 +1,6 @@
+Protocol,Address,TagName,DataType,ScaleMultiplier,ScaleOffset,Units,Description
+ModbusTCP,HR:10195,Setpoint_Frequency_Hz,FLOAT32_SWAPPED,1.0,0.0,Hz,Frequency Setpoint Command Register
+ModbusTCP,HR:10194,Control_Mode_Select,UINT16,1.0,0.0,,Control Mode Register
+ModbusTCP,IR:8500,Feeder_Status_Word,UINT16,0.1,0.0,kV,Feeder Input Register 8500
+ModbusTCP,HR:8299,Holding_Block_8299,UINT16,1.0,0.0,,Holding Register Block Start 8299
+

@@ -49,8 +49,8 @@ public class TSharkStreamingFrameSource : IFrameSource
         startInfo.ArgumentList.Add(pcapFilePath);
         startInfo.ArgumentList.Add("-T");
         startInfo.ArgumentList.Add("ek");
-        startInfo.ArgumentList.Add("-j");
-        startInfo.ArgumentList.Add("modbus dnp3 tcp ip");
+        startInfo.ArgumentList.Add("-J");
+        startInfo.ArgumentList.Add("frame ip tcp mbtcp modbus dnp3");
         startInfo.ArgumentList.Add("-o");
         startInfo.ArgumentList.Add("tcp.desegment_tcp_streams:TRUE");
 
@@ -311,13 +311,13 @@ public class TSharkStreamingFrameSource : IFrameSource
         Dictionary<string, string> fields,
         out ProtocolType protocol)
     {
-        if (layers.TryGetProperty("dnp3", out _))
+        if (HasUnfilteredLayer(layers, "dnp3"))
         {
             protocol = ProtocolType.Dnp3;
             return true;
         }
 
-        if (layers.TryGetProperty("modbus", out _) || layers.TryGetProperty("mbtcp", out _))
+        if (HasUnfilteredLayer(layers, "modbus") || HasUnfilteredLayer(layers, "mbtcp"))
         {
             protocol = ProtocolType.ModbusTcp;
             return true;
@@ -343,6 +343,10 @@ public class TSharkStreamingFrameSource : IFrameSource
         return false;
     }
 
+    private static bool HasUnfilteredLayer(JsonElement layers, string layerName) =>
+        layers.TryGetProperty(layerName, out var layer) &&
+        !(layer.ValueKind == JsonValueKind.Object && layer.TryGetProperty("filtered", out _));
+
     private static bool TryExtractFrameNumber(Dictionary<string, string> fields, out long frameNumber)
     {
         if (TryGetFirst(fields, ["frame.number", "frame_frame_number", "frame_number"], out var raw) &&
@@ -360,12 +364,27 @@ public class TSharkStreamingFrameSource : IFrameSource
         Dictionary<string, string> fields,
         out DateTime timestampUtc)
     {
-        if (TryGetFirst(fields, ["frame.time_epoch", "frame_frame_time_epoch"], out var epochSecondsRaw) &&
-            double.TryParse(epochSecondsRaw, NumberStyles.Float, CultureInfo.InvariantCulture, out var epochSeconds))
+        if (TryGetFirst(
+                fields,
+                ["frame.time_epoch", "frame_frame_time_epoch", "frame.time_utc", "frame_frame_time_utc"],
+                out var epochRaw))
         {
-            long ticks = (long)Math.Round(epochSeconds * TimeSpan.TicksPerSecond);
-            timestampUtc = DateTime.UnixEpoch.AddTicks(ticks);
-            return true;
+            if (double.TryParse(epochRaw, NumberStyles.Float, CultureInfo.InvariantCulture, out var epochSeconds))
+            {
+                long ticks = (long)Math.Round(epochSeconds * TimeSpan.TicksPerSecond);
+                timestampUtc = DateTime.UnixEpoch.AddTicks(ticks);
+                return true;
+            }
+
+            if (DateTimeOffset.TryParse(
+                    epochRaw,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                    out var epochDto))
+            {
+                timestampUtc = epochDto.UtcDateTime;
+                return true;
+            }
         }
 
         if (root.TryGetProperty("timestamp", out var tsProp))

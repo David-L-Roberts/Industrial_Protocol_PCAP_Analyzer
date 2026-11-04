@@ -1,0 +1,27 @@
+{
+  "session_name": "FAT_Modbus_Sample_Ingestion",
+  "pcap_file": "ModbusSampleCapture.pcapng",
+  "timeout_threshold_ms": 2000,
+  "store_unmapped_registers": true,
+  "device_pairs": [
+    {
+      "name": "RTAC_Client_to_Controller_25",
+      "protocol": "ModbusTCP",
+      "client_ip": "10.20.188.9",
+      "server_ip": "10.20.188.25",
+      "client_protocol_address_id": null,
+      "server_protocol_address_id": 247,
+      "tag_mapping_csv": "tags.csv"
+    },
+    {
+      "name": "RTAC_Client_to_Meter_2",
+      "protocol": "ModbusTCP",
+      "client_ip": "10.20.188.9",
+      "server_ip": "10.20.188.2",
+      "client_protocol_address_id": null,
+      "server_protocol_address_id": 1,
+      "tag_mapping_csv": null
+    }
+  ]
+}
+

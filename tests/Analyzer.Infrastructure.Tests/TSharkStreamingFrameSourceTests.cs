@@ -22,7 +22,7 @@ public class TSharkStreamingFrameSourceTests
         {
             "-r", "captures/feeder1.pcap",
             "-T", "ek",
-            "-j", "modbus dnp3 tcp ip",
+            "-J", "frame ip tcp mbtcp modbus dnp3",
             "-o", "tcp.desegment_tcp_streams:TRUE"
         };
         Assert.Equal(expectedArgs, startInfo.ArgumentList);
@@ -101,6 +101,31 @@ public class TSharkStreamingFrameSourceTests
         Assert.Equal(DateTimeOffset.FromUnixTimeMilliseconds(1730000001500).UtcDateTime, single.TimestampUtc);
         Assert.Equal(ProtocolType.ModbusTcp, single.ProtocolName);
         Assert.Equal(new byte[] { 0x00, 0x01, 0x00, 0x00, 0x00, 0x05, 0x01, 0x03, 0x02, 0x12, 0x34 }, single.RawApplicationPayload);
+    }
+
+    [Fact]
+    public async Task ReadFramesFromNdjsonAsync_SupportsIso8601EpochTimestampAndIgnoresFilteredLayerStubs()
+    {
+        const string ndjson = """
+        {"index":{"_index":"packets-2026-10-06"}}
+        {"timestamp":"1791248367568","layers":{"frame":{"frame_frame_number":"1","frame_frame_time_epoch":"2026-10-06T00:59:27.568704000Z","frame_frame_protocols":"eth:ethertype:ip:tcp:mbtcp:modbus"},"ip":{"ip_ip_src":"10.20.188.9","ip_ip_dst":"10.20.188.2"},"tcp":{"tcp_tcp_srcport":"52875","tcp_tcp_dstport":"502","tcp_tcp_payload":"60:e2:00:00:00:06:01:03:34:00:00:1e"},"mbtcp":{"mbtcp_mbtcp_trans_id":"24802","mbtcp_mbtcp_unit_id":"1"},"modbus":{"modbus_modbus_func_code":"3"},"eth":{"filtered":"eth"}}}
+        """;
+
+        var source = new TSharkStreamingFrameSource();
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(ndjson));
+
+        var frames = new List<DissectedFrame>();
+        await foreach (var frame in source.ReadFramesFromNdjsonAsync(stream))
+        {
+            frames.Add(frame);
+        }
+
+        var single = Assert.Single(frames);
+        Assert.Equal(1L, single.FrameNumber);
+        Assert.Equal(DateTimeKind.Utc, single.TimestampUtc.Kind);
+        Assert.Equal(DateTimeOffset.Parse("2026-10-06T00:59:27.5687040Z").UtcDateTime, single.TimestampUtc);
+        Assert.Equal(ProtocolType.ModbusTcp, single.ProtocolName);
+        Assert.Equal(new byte[] { 0x60, 0xE2, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03, 0x34, 0x00, 0x00, 0x1E }, single.RawApplicationPayload);
     }
 
     [Fact]

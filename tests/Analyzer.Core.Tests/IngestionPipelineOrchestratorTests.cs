@@ -23,7 +23,7 @@ public class IngestionPipelineOrchestratorTests
             Id: sessionId,
             Name: "SAT_Feeder1",
             PcapFileName: "synthetic.pcap",
-            S3ObjectKey: null,
+            S3ObjectKey: $"captures/{sessionId:D}/synthetic.pcap",
             TimeoutThresholdMs: 1000,
             StoreUnmappedRegisters: false);
 
@@ -145,6 +145,8 @@ public class IngestionPipelineOrchestratorTests
         Assert.Equal(SessionStatus.Completed, dataSink.CompletedStatus);
 
         Assert.NotNull(summary);
+        Assert.Equal(sessionId, summary.SessionId);
+        Assert.Equal($"captures/{sessionId:D}/synthetic.pcap", summary.S3ObjectKey);
         Assert.Equal(6, summary.TotalFramesProcessed);
         Assert.Equal(4, summary.MatchedFramesProcessed);
         Assert.Equal(3, summary.TotalTransactions);

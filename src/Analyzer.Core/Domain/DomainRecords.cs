@@ -305,5 +305,7 @@ public record PipelineExecutionSummary(
     long ExceptionTransactions,
     long DataPointsPersisted,
     long CommandEventsPersisted,
-    long UnmappedRegistersPersisted
+    long UnmappedRegistersPersisted,
+    Guid SessionId = default,
+    string? S3ObjectKey = null
 );

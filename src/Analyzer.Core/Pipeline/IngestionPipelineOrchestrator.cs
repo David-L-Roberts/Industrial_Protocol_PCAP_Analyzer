@@ -184,7 +184,9 @@ public class IngestionPipelineOrchestrator
                 ExceptionTransactions: exceptionTransactions,
                 DataPointsPersisted: dataPointsPersisted,
                 CommandEventsPersisted: commandEventsPersisted,
-                UnmappedRegistersPersisted: unmappedRegistersPersisted);
+                UnmappedRegistersPersisted: unmappedRegistersPersisted,
+                SessionId: session.Id,
+                S3ObjectKey: session.S3ObjectKey);
         }
         catch (Exception)
         {
