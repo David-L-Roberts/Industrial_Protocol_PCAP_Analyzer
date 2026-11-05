@@ -1,6 +1,6 @@
 services:
   timescaledb:
-    image: timescale/timescaledb:latest-pg15
+    image: timescale/timescaledb:latest-pg16
     container_name: protocol_analyzer_timescaledb
     restart: unless-stopped
     environment:
@@ -11,13 +11,25 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - timescaledb_data:/home/postgres/pgdata/data
-      - ./sql/001_init_timescaledb.sql:/docker-entrypoint-initdb.d/001_init_timescaledb.sql:ro
+      - ./docker/sql/001_init_timescaledb.sql:/docker-entrypoint-initdb.d/001_init_timescaledb.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-analyzer} -d ${POSTGRES_DB:-protocol_analyzer}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: db-management
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@analyzer.com
+      PGADMIN_DEFAULT_PASSWORD: analyzer
+    ports:
+      - "5050:80"
+    volumes:
+      - ./docker/pgConfigs/servers.json:/pgadmin4/servers.json:ro
+    
   minio:
     image: elestio/minio
     container_name: protocol_analyzer_minio
