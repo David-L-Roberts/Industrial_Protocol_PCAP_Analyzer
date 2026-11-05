@@ -1,0 +1,3 @@
+Protocol,Address,TagName,DataType,ScaleMultiplier,ScaleOffset,Units,Description
+DNP3,G12V01:Idx1,Breaker_1_CROB_Latch,BOOL,1.0,0.0,,CROB Binary Output Index 1 Latch Command
+

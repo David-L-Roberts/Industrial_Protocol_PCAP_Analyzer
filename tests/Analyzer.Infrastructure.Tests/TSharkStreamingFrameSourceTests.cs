@@ -75,6 +75,7 @@ public class TSharkStreamingFrameSourceTests
         Assert.NotNull(dnp3Frame.DissectedFields);
         Assert.Equal("1", dnp3Frame.DissectedFields!["dnp3.src"]);
         Assert.Equal("100", dnp3Frame.DissectedFields["dnp3.dst"]);
+        Assert.Equal("1", dnp3Frame.DissectedFields["dnp3.al.func"]);
     }
 
     [Fact]

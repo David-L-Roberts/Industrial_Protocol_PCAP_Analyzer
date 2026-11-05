@@ -299,7 +299,14 @@ public class TSharkStreamingFrameSource : IFrameSource
             var duplicatedPrefix = $"{protoPrefix}_{protoPrefix}_";
             if (rawKey.StartsWith(duplicatedPrefix, StringComparison.OrdinalIgnoreCase))
             {
-                return $"{protoPrefix}.{rawKey[duplicatedPrefix.Length..]}";
+                var suffix = rawKey[duplicatedPrefix.Length..];
+                if (string.Equals(protoPrefix, "dnp3", StringComparison.OrdinalIgnoreCase) &&
+                    suffix.StartsWith("al_", StringComparison.OrdinalIgnoreCase))
+                {
+                    return $"{protoPrefix}.al.{suffix[3..]}";
+                }
+
+                return $"{protoPrefix}.{suffix}";
             }
         }
 

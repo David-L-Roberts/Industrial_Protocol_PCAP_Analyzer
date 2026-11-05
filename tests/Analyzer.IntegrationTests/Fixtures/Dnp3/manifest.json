@@ -1,0 +1,18 @@
+{
+  "session_name": "FAT_Dnp3_Sample_Ingestion",
+  "pcap_file": "Dnp3SampleCapture.pcap",
+  "timeout_threshold_ms": 2000,
+  "store_unmapped_registers": false,
+  "device_pairs": [
+    {
+      "name": "DNP3_Master_4_to_Outstation_3",
+      "protocol": "DNP3",
+      "client_ip": "127.0.0.1",
+      "server_ip": "127.0.0.1",
+      "client_protocol_address_id": 4,
+      "server_protocol_address_id": 3,
+      "tag_mapping_csv": "tags.csv"
+    }
+  ]
+}
+

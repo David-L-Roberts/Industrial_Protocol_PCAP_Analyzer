@@ -4,10 +4,10 @@
 
 **Blocked by:** 02: Live TimescaleDB Batch Persistence & Session Cleanup Slice, 03: Live MinIO PCAP Archiving & Object Lifecycle Slice
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Stores the committed DNP3 capture file alongside a valid `manifest.json` and `tags.csv` in the integration test fixtures folder, tracked in git.
-- [ ] Exercises live `tshark` process dissection against the real DNP3 capture file and verifies that `DissectedFrame` records are emitted with `ProtocolType.Dnp3`, valid UTC timestamps, IP/TCP endpoints, and raw application payloads.
-- [ ] Executes a full end-to-end ingestion run from the DNP3 fixture set through `tshark`, the DNP3 decoder, TimescaleDB persistence, and MinIO archiving.
-- [ ] Queries TimescaleDB and MinIO to assert that the `TestSession` reaches `COMPLETED`, the S3 object key is recorded and present in MinIO, and expected DNP3 RED transactions and CROB `CapturedCommandEventRecord` entries (or decoded data points) are persisted, followed by automatic session and object cleanup unless `KEEP_TEST_DATA=true` is set.
+- [x] Stores the committed DNP3 capture file alongside a valid `manifest.json` and `tags.csv` in the integration test fixtures folder, tracked in git.
+- [x] Exercises live `tshark` process dissection against the real DNP3 capture file and verifies that `DissectedFrame` records are emitted with `ProtocolType.Dnp3`, valid UTC timestamps, IP/TCP endpoints, and raw application payloads.
+- [x] Executes a full end-to-end ingestion run from the DNP3 fixture set through `tshark`, the DNP3 decoder, TimescaleDB persistence, and MinIO archiving.
+- [x] Queries TimescaleDB and MinIO to assert that the `TestSession` reaches `COMPLETED`, the S3 object key is recorded and present in MinIO, and expected DNP3 RED transactions and CROB `CapturedCommandEventRecord` entries (or decoded data points) are persisted, followed by automatic session and object cleanup unless `KEEP_TEST_DATA=true` is set.
 
