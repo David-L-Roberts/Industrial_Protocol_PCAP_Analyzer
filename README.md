@@ -54,10 +54,10 @@ Before running the CLI analyzer, ensure the following dependencies are installed
 
 ## Quickstart with Docker Compose
 
-A pre-configured `docker-compose.yml` is provided at the repository root to start **TimescaleDB**, **MinIO**, and **Grafana**:
+A pre-configured `docker-compose.yml` is provided at the repository root to start **TimescaleDB**, **pgAdmin**, **MinIO**, and **Grafana**:
 
 ```bash
-# Start TimescaleDB, MinIO, and Grafana in the background
+# Start TimescaleDB, pgAdmin, MinIO, and Grafana in the background
 docker compose up -d
 
 # Check service health
@@ -68,7 +68,8 @@ docker compose ps
 
 | Service | Port | Default Credentials | Notes |
 | :--- | :--- | :--- | :--- |
-| **TimescaleDB** | `localhost:5432` | User: `analyzer`<br/>Password: `analyzer_dev_password`<br/>DB: `protocol_analyzer` | Automatically runs `sql/001_init_timescaledb.sql` upon container creation |
+| **TimescaleDB** | `localhost:5432` | User: `analyzer`<br/>Password: `analyzer_dev_password`<br/>DB: `protocol_analyzer` | Automatically runs `docker/sql/001_init_timescaledb.sql` upon container creation |
+| **pgAdmin** | `localhost:5050` | User: `admin@analyzer.com`<br/>Password: `analyzer` | Web UI for PostgreSQL/TimescaleDB; auto-loads preconfigured server connection |
 | **MinIO API** | `localhost:9000` | User: `minioadmin`<br/>Password: `minioadmin_dev_password` | S3 API endpoint for capture archiving |
 | **MinIO Console** | `localhost:9001` | User: `minioadmin`<br/>Password: `minioadmin_dev_password` | Web UI to inspect uploaded PCAP buckets |
 | **Grafana** | `localhost:3000` | User: `admin`<br/>Password: `admin_dev_password` | Pre-configured visualization dashboards |
@@ -87,12 +88,86 @@ docker compose down
 dotnet build ProtocolAnalyzer.sln
 ```
 
-### Run All Unit Tests
+---
+
+### Running Tests
+
+The test suite is partitioned into **fast unit tests** (dependency-free) and **live integration tests** (which test real Docker services, `tshark`, and PCAP fixtures).
+
+#### 1. Fast Unit Tests (Default / Offline / CI)
+By default, running `dotnet test` executes all self-contained unit tests across `Analyzer.Core.Tests`, `Analyzer.Decoders.Modbus.Tests`, `Analyzer.Decoders.Dnp3.Tests`, `Analyzer.Infrastructure.Tests`, and `Analyzer.Cli.Tests`:
+
 ```bash
 dotnet test ProtocolAnalyzer.sln
 ```
 
-*Note: All unit tests run against synthetic frames and in-memory sinks without invoking `tshark` or requiring a live database connection.*
+- **Zero External Dependencies**: Runs entirely in-memory using synthetic packets, test frames, and mock/fake sinks.
+- **Auto-Skipped Integration Tests**: Any tests decorated with `[IntegrationFact]` or `[IntegrationTheory]` in `Analyzer.IntegrationTests` are automatically skipped with an informative notice when run without the integration runsettings file.
+- **Fast Feedback**: Executes the full test suite (~125+ tests) in under 2 seconds.
+
+#### 2. Live Integration Tests (End-to-End Pipeline & Infrastructure)
+The `Analyzer.IntegrationTests` suite validates live interactions against real infrastructure, including:
+- **Infrastructure Smoke Tests**: Live connectivity and schema validation for TimescaleDB, MinIO bucket operations, and `tshark` version checks.
+- **TimescaleDB Persistence & Session Lifecycle**: Full batch ingestion, relational metadata insertion, hypertables writing, $T_0$ initial state updates, and cascading session deletion.
+- **MinIO PCAP Archiving & Lifecycle**: File stream archiving, SHA-256 / metadata validation, and object cleanup.
+- **Real Modbus TCP Capture Ingestion**: Live `tshark` process dissection of `ModbusSampleCapture.pcapng` and full runner ingestion into TimescaleDB and MinIO.
+- **Real DNP3 Capture Ingestion**: Live `tshark` process dissection of `Dnp3SampleCapture.pcap` and full runner ingestion, asserting RED transactions, CROB `Select`/`Operate` command events, and $T_0$ states.
+
+##### Prerequisites for Integration Tests
+1. Start the local containers via Docker Compose:
+   ```bash
+   docker compose up -d
+   ```
+2. Ensure `tshark` is installed and reachable (set `TSHARK_PATH` in `.env` if not in system `PATH`).
+
+##### Running the Integration Suite
+To activate live integration tests, pass `--settings integration.runsettings` (which sets `RUN_INTEGRATION_TESTS=true`):
+
+```bash
+# Run all unit tests AND live integration tests across the entire solution
+dotnet test ProtocolAnalyzer.sln --settings integration.runsettings
+
+# Run only the live integration test project
+dotnet test tests/Analyzer.IntegrationTests/Analyzer.IntegrationTests.csproj --settings integration.runsettings
+```
+
+##### Filtering Tests
+You can filter by trait, fixture, or protocol:
+
+```bash
+# Run only integration tests (skipping unit tests)
+dotnet test ProtocolAnalyzer.sln --settings integration.runsettings --filter "Category=Integration"
+
+# Run only the Modbus integration tests
+dotnet test tests/Analyzer.IntegrationTests/Analyzer.IntegrationTests.csproj --settings integration.runsettings --filter "FullyQualifiedName~Modbus"
+
+# Run only the DNP3 integration tests
+dotnet test tests/Analyzer.IntegrationTests/Analyzer.IntegrationTests.csproj --settings integration.runsettings --filter "FullyQualifiedName~Dnp3"
+```
+
+##### Integration Test Configuration (`.env`)
+Configuration is resolved hierarchically:
+1. Process environment variables / `integration.runsettings` (highest precedence).
+2. `.env` file at repository root (untracked local overrides).
+3. `.env.example` file at repository root (tracked defaults aligned with `docker-compose.yml`).
+
+Key configuration settings:
+
+| Setting | Default (`.env.example`) | Description |
+| :--- | :--- | :--- |
+| `POSTGRES_HOST` | `localhost` | TimescaleDB host |
+| `POSTGRES_PORT` | `5432` | TimescaleDB port |
+| `POSTGRES_DB` | `protocol_analyzer` | Database name |
+| `POSTGRES_USER` | `analyzer` | Database user |
+| `POSTGRES_PASSWORD` | `analyzer_dev_password` | Database password |
+| `TIMESCALE_CONNECTION_STRING` | *Derived from POSTGRES_** | Optional explicit Npgsql connection string |
+| `MINIO_ENDPOINT` | `localhost:9000` | MinIO S3 API endpoint |
+| `MINIO_ROOT_USER` | `minioadmin` | MinIO access key |
+| `MINIO_ROOT_PASSWORD` | `minioadmin_dev_password` | MinIO secret key |
+| `MINIO_BUCKET` | `pcap-captures` | Target bucket for captures |
+| `MINIO_USE_SSL` | `false` | Enable SSL for MinIO |
+| `TSHARK_PATH` | `C:\Program Files\Wireshark\tshark.exe` (or `tshark`) | Path to `tshark` executable |
+| `KEEP_TEST_DATA` | `false` | When `false` (default), all test session rows in TimescaleDB and objects in MinIO are automatically cleaned up after tests run. Set to `true` to keep test data for inspection in pgAdmin (`http://localhost:5050`), MinIO Console (`http://localhost:9001`), or Grafana (`http://localhost:3000`). |
 
 ---
 
