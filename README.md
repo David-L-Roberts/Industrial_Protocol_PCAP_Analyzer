@@ -187,6 +187,62 @@ Or from the compiled output directory:
 Analyzer.Cli analyze --manifest <path> --db <connection_string> [options]
 ```
 
+### Example Commands
+
+Below are concrete, ready-to-run examples matching the default endpoints from `docker-compose.yml` and the committed fixture files in the repository:
+
+#### 1. Full Ingestion with MinIO PCAP Archiving (Modbus TCP)
+Runs live `tshark` dissection against `ModbusSampleCapture.pcapng`, persists RED metrics, tag telemetry, command events, and unmapped registers to TimescaleDB, and archives the capture file to MinIO:
+
+```bash
+dotnet run --project src/Analyzer.Cli/Analyzer.Cli.csproj -- analyze \
+  --manifest tests/Analyzer.IntegrationTests/Fixtures/Modbus/manifest.json \
+  --db "Host=localhost;Port=5432;Database=protocol_analyzer;Username=analyzer;Password=analyzer_dev_password" \
+  --s3-endpoint "http://localhost:9000" \
+  --s3-bucket "pcap-captures" \
+  --s3-access-key "minioadmin" \
+  --s3-secret-key "minioadmin_dev_password"
+```
+
+#### 2. Local Database Only (DNP3, Skipping PCAP Archiving)
+When `--s3-endpoint` is omitted, capture archiving is safely skipped and all frames are processed directly into TimescaleDB:
+
+```bash
+dotnet run --project src/Analyzer.Cli/Analyzer.Cli.csproj -- analyze \
+  --manifest tests/Analyzer.IntegrationTests/Fixtures/Dnp3/manifest.json \
+  --db "Host=localhost;Port=5432;Database=protocol_analyzer;Username=analyzer;Password=analyzer_dev_password"
+```
+
+#### 3. Specifying Custom `tshark` Path (Windows Wireshark Installation)
+If `tshark` is not in your system `PATH`, specify its location with `--tshark`:
+
+```bash
+dotnet run --project src/Analyzer.Cli/Analyzer.Cli.csproj -- analyze \
+  --manifest tests/Analyzer.IntegrationTests/Fixtures/Modbus/manifest.json \
+  --db "Host=localhost;Port=5432;Database=protocol_analyzer;Username=analyzer;Password=analyzer_dev_password" \
+  --tshark "C:\Program Files\Wireshark\tshark.exe"
+```
+
+#### 4. Offline Analysis via Pre-Extracted NDJSON (No `tshark` Required)
+If you have already extracted the EK NDJSON packet dump via `tshark -T ek`, you can provide `--ndjson-input` to bypass spawning `tshark` entirely, along with a custom batch size:
+
+```bash
+dotnet run --project src/Analyzer.Cli/Analyzer.Cli.csproj -- analyze \
+  --manifest tests/Analyzer.IntegrationTests/Fixtures/Modbus/manifest.json \
+  --db "Host=localhost;Port=5432;Database=protocol_analyzer;Username=analyzer;Password=analyzer_dev_password" \
+  --ndjson-input "captures/pre_extracted_modbus.ndjson" \
+  --batch-size 2500
+```
+
+#### 5. Shorthand Flags with Compiled Binary
+Using the shorthand flags `-m` and `-d`:
+
+```bash
+Analyzer.Cli analyze \
+  -m tests/Analyzer.IntegrationTests/Fixtures/Modbus/manifest.json \
+  -d "Host=localhost;Port=5432;Database=protocol_analyzer;Username=analyzer;Password=analyzer_dev_password"
+```
+
 ### Options Reference
 
 | Argument / Option | Short | Required? | Default | Description |
@@ -361,11 +417,11 @@ If `--s3-endpoint` is passed:
 
 ## Example Ingestion Session
 
-Given a capture in `tests/fixtures/sample.pcap` with `manifest.json` and `tags.csv`:
+Using the sample Modbus capture in `tests/Analyzer.IntegrationTests/Fixtures/Modbus/`:
 
 ```bash
 dotnet run --project src/Analyzer.Cli/Analyzer.Cli.csproj -- analyze \
-  --manifest ./tests/fixtures/manifest.json \
+  --manifest tests/Analyzer.IntegrationTests/Fixtures/Modbus/manifest.json \
   --db "Host=localhost;Port=5432;Database=protocol_analyzer;Username=analyzer;Password=analyzer_dev_password" \
   --s3-endpoint "http://localhost:9000" \
   --s3-access-key "minioadmin" \
