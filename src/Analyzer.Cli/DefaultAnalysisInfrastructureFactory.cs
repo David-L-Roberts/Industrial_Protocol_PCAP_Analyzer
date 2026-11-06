@@ -23,7 +23,31 @@ public sealed class DefaultAnalysisInfrastructureFactory : IAnalysisInfrastructu
                 streamProvider: (path, ct) => Task.FromResult<Stream>(File.OpenRead(options.NdjsonInputPath)));
         }
 
-        return new TSharkStreamingFrameSource(tsharkExecutablePath: options.TSharkPath);
+        var tsharkPath = ResolveTSharkPath(options.TSharkPath);
+        return new TSharkStreamingFrameSource(tsharkExecutablePath: tsharkPath);
+    }
+
+    private static string ResolveTSharkPath(string configured)
+    {
+        if (string.IsNullOrWhiteSpace(configured) || string.Equals(configured, "tshark", StringComparison.OrdinalIgnoreCase))
+        {
+            var envTshark = Environment.GetEnvironmentVariable("TSHARK_PATH");
+            if (!string.IsNullOrWhiteSpace(envTshark) && File.Exists(envTshark))
+            {
+                return envTshark;
+            }
+
+            if (OperatingSystem.IsWindows())
+            {
+                const string defaultWindowsWiresharkPath = @"C:\Program Files\Wireshark\tshark.exe";
+                if (File.Exists(defaultWindowsWiresharkPath))
+                {
+                    return defaultWindowsWiresharkPath;
+                }
+            }
+        }
+
+        return configured;
     }
 
     public IPcapArchiveStorage? CreateArchiver(AnalysisOptions options)

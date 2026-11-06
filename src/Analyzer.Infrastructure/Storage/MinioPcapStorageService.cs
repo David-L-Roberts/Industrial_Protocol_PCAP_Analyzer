@@ -67,17 +67,41 @@ public sealed class MinioPcapStorageService : IPcapArchiveStorage
     {
     }
 
+    public static (string Endpoint, bool WithSsl) NormalizeEndpoint(string rawEndpoint, bool configuredSsl = false)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(rawEndpoint);
+        var trimmed = rawEndpoint.Trim();
+
+        if (trimmed.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            var uri = new Uri(trimmed);
+            return (uri.Authority, true);
+        }
+
+        if (trimmed.StartsWith("http://", StringComparison.OrdinalIgnoreCase))
+        {
+            var uri = new Uri(trimmed);
+            return (uri.Authority, configuredSsl);
+        }
+
+        var slashIndex = trimmed.IndexOf('/');
+        var hostPort = slashIndex >= 0 ? trimmed[..slashIndex] : trimmed;
+        return (hostPort, configuredSsl);
+    }
+
     public static IMinioClient BuildMinioClient(MinioStorageOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.Endpoint);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.BucketName);
 
+        var (normalizedEndpoint, withSsl) = NormalizeEndpoint(options.Endpoint, options.WithSsl);
+
         var builder = new MinioClient()
-            .WithEndpoint(options.Endpoint)
+            .WithEndpoint(normalizedEndpoint)
             .WithCredentials(options.AccessKey, options.SecretKey);
 
-        if (options.WithSsl)
+        if (withSsl)
         {
             builder = builder.WithSSL();
         }

@@ -19,6 +19,48 @@ public class MinioPcapStorageServiceTests
     }
 
     [Theory]
+    [InlineData("http://localhost:9000", "localhost:9000", false, false)]
+    [InlineData("http://localhost:9000/", "localhost:9000", false, false)]
+    [InlineData("http://localhost:9000", "localhost:9000", true, true)]
+    [InlineData("https://localhost:9000", "localhost:9000", false, true)]
+    [InlineData("https://localhost:9000/", "localhost:9000", false, true)]
+    [InlineData("https://localhost:9000/some/path", "localhost:9000", false, true)]
+    [InlineData("localhost:9000", "localhost:9000", false, false)]
+    [InlineData("localhost:9000/", "localhost:9000", false, false)]
+    [InlineData("localhost:9000", "localhost:9000", true, true)]
+    [InlineData("127.0.0.1:9000", "127.0.0.1:9000", false, false)]
+    [InlineData("s3.amazonaws.com", "s3.amazonaws.com", false, false)]
+    [InlineData("https://s3.amazonaws.com", "s3.amazonaws.com", false, true)]
+    public void NormalizeEndpoint_ExtractsHostPortAndDeterminesSsl(
+        string rawEndpoint,
+        string expectedHostPort,
+        bool configuredSsl,
+        bool expectedSsl)
+    {
+        var (endpoint, withSsl) = MinioPcapStorageService.NormalizeEndpoint(rawEndpoint, configuredSsl);
+
+        Assert.Equal(expectedHostPort, endpoint);
+        Assert.Equal(expectedSsl, withSsl);
+    }
+
+    [Theory]
+    [InlineData("http://localhost:9000")]
+    [InlineData("https://localhost:9000")]
+    [InlineData("localhost:9000")]
+    [InlineData("localhost:9000/")]
+    public void BuildMinioClient_SucceedsForVariousEndpointFormats(string endpoint)
+    {
+        var options = new MinioStorageOptions(
+            Endpoint: endpoint,
+            AccessKey: "minioadmin",
+            SecretKey: "minioadmin_dev_password",
+            BucketName: "pcap-captures");
+
+        var client = MinioPcapStorageService.BuildMinioClient(options);
+        Assert.NotNull(client);
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData("   ")]
     public void GenerateObjectKey_ThrowsOnInvalidPath(string invalidPath)
