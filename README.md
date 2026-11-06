@@ -66,6 +66,99 @@ Or from the compiled output directory:
 Analyzer.Cli analyze --manifest <path> --db <connection_string> [options]
 ```
 
+### Compiling into an Executable (.exe)
+
+You can compile the CLI tool ([`Analyzer.Cli.csproj`](file:///c:/Users/david.roberts/Documents/20.%20Development/210%20C-sharp/Industrial_Protocol_PCAP_Analyzer/src/Analyzer.Cli/Analyzer.Cli.csproj)) into a native binary using the `dotnet publish` command. Two publishing modes are supported:
+
+#### Option A: Self-Contained Single-File Executable (Recommended for Field / FAT / SAT Machines)
+This mode bundles the .NET 8 runtime and all framework dependencies directly into a single executable file. The target testing or field computer **does not need the .NET 8 SDK or Runtime installed**:
+
+```powershell
+dotnet publish src/Analyzer.Cli/Analyzer.Cli.csproj `
+  -c Release `
+  -r win-x64 `
+  --self-contained true `
+  -p:PublishSingleFile=true `
+  -o publish/win-x64/
+```
+
+* **Generated File:** `publish/win-x64/Analyzer.Cli.exe` (~72 MB self-contained binary) and `Analyzer.Cli.pdb` (debug symbols).
+* **Cross-Platform (Linux):** Replace `-r win-x64` with `-r linux-x64` to generate an executable Linux binary (`publish/linux-x64/Analyzer.Cli`).
+
+#### Option B: Framework-Dependent Executable (Lightweight)
+This mode produces a small executable stub (~150 KB) along with supporting DLLs. The target machine **must have the [.NET 8.0 Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)** installed:
+
+```powershell
+dotnet publish src/Analyzer.Cli/Analyzer.Cli.csproj `
+  -c Release `
+  -o publish/cli/
+```
+
+* **Generated File:** `publish/cli/Analyzer.Cli.exe` along with its dependency DLLs.
+
+---
+
+### Accessing and Using the .exe
+
+Once compiled, `Analyzer.Cli.exe` can be invoked directly from PowerShell, Windows Command Prompt (CMD), or terminal scripts without requiring `dotnet run`.
+
+#### 1. Direct Invocation
+You can execute the binary from your current working directory or navigate to the publish folder:
+
+```powershell
+# PowerShell / Terminal (from the repository root):
+.\publish\win-x64\Analyzer.Cli.exe analyze `
+  --manifest tests/Analyzer.IntegrationTests/Fixtures/Modbus/manifest.json `
+  --db "Host=localhost;Port=5432;Database=protocol_analyzer;Username=analyzer;Password=analyzer_dev_password"
+```
+
+In Windows Command Prompt (`cmd.exe`):
+```cmd
+publish\win-x64\Analyzer.Cli.exe analyze ^
+  --manifest tests\Analyzer.IntegrationTests\Fixtures\Modbus\manifest.json ^
+  --db "Host=localhost;Port=5432;Database=protocol_analyzer;Username=analyzer;Password=analyzer_dev_password"
+```
+
+To display help and available options:
+```powershell
+.\publish\win-x64\Analyzer.Cli.exe --help
+.\publish\win-x64\Analyzer.Cli.exe analyze --help
+```
+
+#### 2. Adding to System PATH (Optional)
+To run `Analyzer.Cli` from any directory or test folder on your machine:
+1. Copy `Analyzer.Cli.exe` to a dedicated utility folder (e.g., `C:\Tools\ProtocolAnalyzer\`), or add the `publish\win-x64\` folder directly to your user or system `PATH` environment variable.
+2. In PowerShell, you can temporarily add the output directory to your current session:
+   ```powershell
+   $env:PATH += ";$PWD\publish\win-x64"
+   ```
+3. You can then run the analyzer anywhere simply as:
+   ```powershell
+   Analyzer.Cli.exe analyze -m path/to/manifest.json -d "<connection_string>"
+   ```
+
+#### 3. Runtime Prerequisites & Environment Requirements
+Even with a self-contained single-file `.exe`, the application interacts with external services and packet dissection tools. Ensure the following are set up on the target machine:
+
+1. **Wireshark / `tshark` Installation**:
+   - `Analyzer.Cli.exe` launches `tshark` as a subprocess to stream-dissect PCAP / PCAPNG captures.
+   - If installed in the default location (`C:\Program Files\Wireshark\tshark.exe`) and present in `PATH`, it is detected automatically.
+   - If `tshark` is located elsewhere, supply the `--tshark` argument:
+     ```powershell
+     --tshark "C:\CustomTools\Wireshark\tshark.exe"
+     ```
+   - *Note:* If you supply pre-dissected EK NDJSON captures using `--ndjson-input`, `tshark` is not required.
+2. **TimescaleDB / PostgreSQL Reachability**:
+   - The machine running the `.exe` must have network line-of-sight to PostgreSQL / TimescaleDB (default port 5432) specified in `--db`.
+   - The database schema must be initialized (see `docker/sql/001_init_timescaledb.sql`).
+3. **MinIO / S3 Object Storage (Optional)**:
+   - If archiving raw PCAPs via `--s3-endpoint`, the S3 endpoint (default port 9000) must be reachable. If `--s3-endpoint` is omitted, PCAP archiving is skipped and only database persistence is performed.
+4. **File Path Resolution**:
+   - Manifest paths (`--manifest`) can be relative to your current working directory or absolute.
+   - Paths referenced *inside* the manifest JSON (such as `pcap_file` and `tag_mapping_csv`) resolve relative to the manifest file's parent folder.
+
+---
+
 ### Example Commands
 
 Below are concrete, ready-to-run examples matching the default endpoints from `docker-compose.yml` and the committed fixture files in the repository:
@@ -353,11 +446,28 @@ Before building or developing on the solution, ensure the following are installe
 
 ---
 
-### Building the Solution
+### Building & Publishing the Solution
 
+#### Build the Entire Solution
 ```bash
 dotnet build ProtocolAnalyzer.sln
 ```
+
+#### Compile / Publish Standalone CLI Executables
+To produce standalone or framework-dependent executables for field deployment, see [Compiling into an Executable (.exe)](#compiling-into-an-executable-exe).
+
+* **Self-Contained Single-File (Windows):**
+  ```powershell
+  dotnet publish src/Analyzer.Cli/Analyzer.Cli.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish/win-x64/
+  ```
+* **Self-Contained Single-File (Linux):**
+  ```bash
+  dotnet publish src/Analyzer.Cli/Analyzer.Cli.csproj -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -o publish/linux-x64/
+  ```
+* **Framework-Dependent:**
+  ```powershell
+  dotnet publish src/Analyzer.Cli/Analyzer.Cli.csproj -c Release -o publish/cli/
+  ```
 
 ---
 
