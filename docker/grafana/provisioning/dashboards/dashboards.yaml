@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  - name: 'Industrial Protocol Analyzer'
+    orgId: 1
+    folder: 'Industrial Protocols'
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /etc/grafana/dashboards
+

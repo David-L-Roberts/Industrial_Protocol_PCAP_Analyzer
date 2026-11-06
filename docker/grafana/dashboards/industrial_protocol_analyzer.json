@@ -1,0 +1,1343 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "Session Overview & Quick Health KPIs",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "datasource", "uid": "grafana" },
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 1 },
+      "id": 2,
+      "options": {
+        "code": { "language": "plaintext", "showLineNumbers": false, "showMiniMap": false },
+        "content": "### ℹ️ Industrial Protocol PCAP Analyzer (FAT/SAT Telemetry)\n**Select a session** using the `$session` dropdown above to isolate telemetry from a specific test run.\n> **Virtual-Clock Note:** PCAP packet captures reflect historical timestamps recorded during physical or simulated testing. Consult the **Capture Start** and **Capture End** columns in the table below to adjust Grafana's time range picker (top right) to match the capture window.",
+        "mode": "markdown"
+      },
+      "pluginVersion": "10.0.0",
+      "title": "Analysis Instructions & Time Range Guidance",
+      "type": "text"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": { "align": "auto", "displayMode": "auto", "filterable": false, "inspect": true },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 10, "x": 0, "y": 4 },
+      "id": 3,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": false, "fields": "", "reducer": ["sum"], "show": false },
+        "showHeader": true,
+        "sortBy": []
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  s.name AS \"Session Name\",\n  s.pcap_file_name AS \"PCAP File\",\n  s.status AS \"Status\",\n  s.timeout_threshold_ms || ' ms' AS \"Timeout Limit\",\n  to_char(MIN(r.timestamp), 'YYYY-MM-DD HH24:MI:SS.MS TZ') AS \"Capture Start\",\n  to_char(MAX(r.timestamp), 'YYYY-MM-DD HH24:MI:SS.MS TZ') AS \"Capture End\",\n  to_char(MAX(r.timestamp) - MIN(r.timestamp), 'HH24:MI:SS.US') AS \"Duration\",\n  COUNT(r.frame_number) AS \"Total Tx\"\nFROM test_sessions s\nLEFT JOIN red_transactions r ON s.id = r.session_id\nWHERE s.id = '$session'\nGROUP BY s.id, s.name, s.pcap_file_name, s.status, s.timeout_threshold_ms;",
+          "refId": "A"
+        }
+      ],
+      "title": "Session Metadata & Virtual Time Bounds",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 3, "w": 3, "x": 10, "y": 4 },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) AS \"Total Transactions\"\nFROM red_transactions\nWHERE session_id = '$session'\n  AND device_pair_id IN ($device_pair)\n  AND ('$direction' = 'All' OR direction = '$direction');",
+          "refId": "A"
+        }
+      ],
+      "title": "Total Transactions",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "#EAB839", "value": 1.0 },
+              { "color": "red", "value": 5.0 }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 3, "w": 3, "x": 13, "y": 4 },
+      "id": 5,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  ROUND((COUNT(*) FILTER (WHERE is_error) * 100.0 / NULLIF(COUNT(*), 0))::numeric, 2) AS \"Error Rate\"\nFROM red_transactions\nWHERE session_id = '$session'\n  AND device_pair_id IN ($device_pair)\n  AND ('$direction' = 'All' OR direction = '$direction');",
+          "refId": "A"
+        }
+      ],
+      "title": "Error Rate",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 50 },
+              { "color": "red", "value": 200 }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 3, "w": 4, "x": 16, "y": 4 },
+      "id": 6,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  ROUND(AVG(duration_ms)::numeric, 2) AS \"Avg Latency\"\nFROM red_transactions\nWHERE session_id = '$session'\n  AND device_pair_id IN ($device_pair)\n  AND ('$direction' = 'All' OR direction = '$direction')\n  AND duration_ms IS NOT NULL;",
+          "refId": "A"
+        }
+      ],
+      "title": "Avg Response Time",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 100 },
+              { "color": "red", "value": 500 }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 3, "w": 4, "x": 20, "y": 4 },
+      "id": 7,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  ROUND(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::numeric, 2) AS \"P95 Latency\"\nFROM red_transactions\nWHERE session_id = '$session'\n  AND device_pair_id IN ($device_pair)\n  AND ('$direction' = 'All' OR direction = '$direction')\n  AND duration_ms IS NOT NULL;",
+          "refId": "A"
+        }
+      ],
+      "title": "P95 Response Time",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 3, "w": 3, "x": 10, "y": 7 },
+      "id": 8,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(DISTINCT id) AS \"Device Pairs\"\nFROM device_pairs\nWHERE session_id = '$session';",
+          "refId": "A"
+        }
+      ],
+      "title": "Device Pairs",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "teal", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 3, "w": 3, "x": 13, "y": 7 },
+      "id": 9,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(DISTINCT td.id) AS \"Monitored Tags\"\nFROM tag_definitions td\nJOIN device_pairs dp ON td.device_pair_id = dp.id\nWHERE dp.session_id = '$session';",
+          "refId": "A"
+        }
+      ],
+      "title": "Monitored Tags",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 3, "w": 4, "x": 16, "y": 7 },
+      "id": 10,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) AS \"Captured Commands\"\nFROM captured_command_events\nWHERE session_id = '$session'\n  AND device_pair_id IN ($device_pair);",
+          "refId": "A"
+        }
+      ],
+      "title": "Captured Commands",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "orange", "value": 50 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 3, "w": 4, "x": 20, "y": 7 },
+      "id": 11,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COUNT(*) AS \"Unmapped Registers\"\nFROM modbus_raw_unmapped\nWHERE session_id = '$session'\n  AND device_pair_id IN ($device_pair);",
+          "refId": "A"
+        }
+      ],
+      "title": "Unmapped Modbus Polls",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 10 },
+      "id": 12,
+      "title": "RED Metrics (Virtual-Clock Rate, Errors & Duration)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "Transactions / sec",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "gradientMode": "opacity",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 14, "x": 0, "y": 11 },
+      "id": 13,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  $__timeGroupAlias(timestamp, $__interval),\n  dp.name || ' (' || r.direction || ')' AS metric,\n  COUNT(*) / ($__interval_ms / 1000.0) AS value\nFROM red_transactions r\nJOIN device_pairs dp ON r.device_pair_id = dp.id\nWHERE r.session_id = '$session'\n  AND r.device_pair_id IN ($device_pair)\n  AND ('$direction' = 'All' OR r.direction = '$direction')\n  AND $__timeFilter(r.timestamp)\nGROUP BY 1, 2\nORDER BY 1;",
+          "refId": "A"
+        }
+      ],
+      "title": "Transaction Rate (Throughput)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "Error Count",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "bars",
+            "fillOpacity": 90,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "normal" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }] },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 10, "x": 14, "y": 11 },
+      "id": 14,
+      "options": {
+        "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  $__timeGroupAlias(timestamp, $__interval),\n  error_type AS metric,\n  COUNT(*) AS value\nFROM red_transactions\nWHERE session_id = '$session'\n  AND device_pair_id IN ($device_pair)\n  AND ('$direction' = 'All' OR direction = '$direction')\n  AND is_error = TRUE\n  AND $__timeFilter(timestamp)\nGROUP BY 1, 2\nORDER BY 1;",
+          "refId": "A"
+        }
+      ],
+      "title": "Errors Over Time (By Error Type)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "Duration (ms)",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "auto",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "line" }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 2000 }
+            ]
+          },
+          "unit": "ms"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Max Duration (ms)" },
+            "properties": [
+              { "id": "custom.lineStyle", "value": { "dash": [5, 5], "fill": "dash" } },
+              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "P95 Duration (ms)" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "orange", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Avg Duration (ms)" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 14, "x": 0, "y": 19 },
+      "id": 15,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  $__timeGroupAlias(timestamp, $__interval),\n  ROUND(AVG(duration_ms)::numeric, 2) AS \"Avg Duration (ms)\",\n  ROUND(percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms)::numeric, 2) AS \"P95 Duration (ms)\",\n  ROUND(MAX(duration_ms)::numeric, 2) AS \"Max Duration (ms)\"\nFROM red_transactions\nWHERE session_id = '$session'\n  AND device_pair_id IN ($device_pair)\n  AND ('$direction' = 'All' OR direction = '$direction')\n  AND duration_ms IS NOT NULL\n  AND $__timeFilter(timestamp)\nGROUP BY 1\nORDER BY 1;",
+          "refId": "A"
+        }
+      ],
+      "title": "Transaction Response Duration (Latency)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "hideFrom": { "legend": false, "tooltip": false, "viz": false } },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 5, "x": 14, "y": 19 },
+      "id": 16,
+      "options": {
+        "displayLabels": ["percent"],
+        "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true, "values": ["value"] },
+        "pieType": "donut",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "tooltip": { "mode": "single", "sort": "desc" }
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  status_code AS metric,\n  COUNT(*) AS value\nFROM red_transactions\nWHERE session_id = '$session'\n  AND device_pair_id IN ($device_pair)\n  AND ('$direction' = 'All' OR direction = '$direction')\n  AND $__timeFilter(timestamp)\nGROUP BY status_code\nORDER BY value DESC;",
+          "refId": "A"
+        }
+      ],
+      "title": "Status & Exception Codes",
+      "type": "piechart"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 5, "x": 19, "y": 19 },
+      "id": 17,
+      "options": {
+        "displayMode": "gradient",
+        "minVizHeight": 10,
+        "minVizWidth": 0,
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "showUnfilled": true
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  dp.protocol || ' FC ' || r.function_code AS \"Function Code\",\n  COUNT(*) AS \"Transactions\"\nFROM red_transactions r\nJOIN device_pairs dp ON r.device_pair_id = dp.id\nWHERE r.session_id = '$session'\n  AND r.device_pair_id IN ($device_pair)\n  AND ('$direction' = 'All' OR r.direction = '$direction')\n  AND $__timeFilter(r.timestamp)\nGROUP BY dp.protocol, r.function_code\nORDER BY \"Transactions\" DESC;",
+          "refId": "A"
+        }
+      ],
+      "title": "Function Code Distribution",
+      "type": "bargauge"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": { "align": "auto", "displayMode": "auto", "filterable": true, "inspect": true },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Error Type" },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "color-text"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  { "options": { "NONE": { "color": "green", "index": 0 } }, "type": "value" },
+                  { "options": { "TIMEOUT": { "color": "red", "index": 1 } }, "type": "value" },
+                  { "options": { "TIMEOUT_AT_EOF": { "color": "orange", "index": 2 } }, "type": "value" },
+                  { "options": { "EXCEPTION": { "color": "purple", "index": 3 } }, "type": "value" },
+                  { "options": { "MALFORMED": { "color": "red", "index": 4 } }, "type": "value" }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Duration (ms)" },
+            "properties": [
+              { "id": "unit", "value": "ms" },
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    { "color": "semi-transparent-green", "value": null },
+                    { "color": "semi-transparent-yellow", "value": 100 },
+                    { "color": "semi-transparent-red", "value": 500 }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 27 },
+      "id": 18,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": true, "fields": "", "reducer": ["sum"], "show": true },
+        "showHeader": true,
+        "sortBy": [{ "desc": true, "displayName": "Frame #" }]
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  r.frame_number AS \"Frame #\",\n  to_char(r.timestamp, 'YYYY-MM-DD HH24:MI:SS.MS') AS \"Timestamp\",\n  dp.name AS \"Device Pair\",\n  r.direction AS \"Direction\",\n  r.transaction_id AS \"Tx ID\",\n  r.function_code AS \"FC\",\n  ROUND(r.duration_ms::numeric, 2) AS \"Duration (ms)\",\n  r.error_type AS \"Error Type\",\n  r.status_code AS \"Status Code\"\nFROM red_transactions r\nJOIN device_pairs dp ON r.device_pair_id = dp.id\nWHERE r.session_id = '$session'\n  AND r.device_pair_id IN ($device_pair)\n  AND ('$direction' = 'All' OR r.direction = '$direction')\n  AND (r.is_error = TRUE OR r.duration_ms > 100)\n  AND $__timeFilter(r.timestamp)\nORDER BY r.timestamp DESC\nLIMIT 100;",
+          "refId": "A"
+        }
+      ],
+      "title": "High-Latency Anomalies & Error Transactions Log",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 34 },
+      "id": 19,
+      "title": "Industrial Process Telemetry & Tag Time Series",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "Scaled Engineering Value",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "auto",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 35 },
+      "id": 20,
+      "options": {
+        "legend": { "calcs": ["lastNotNull", "min", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  $__timeGroupAlias(tv.packet_timestamp, $__interval),\n  td.tag_name || COALESCE(' [' || td.engineering_units || ']', '') AS metric,\n  AVG(tv.scaled_numeric_value) AS value\nFROM tag_values tv\nJOIN tag_definitions td ON tv.tag_id = td.id\nWHERE tv.session_id = '$session'\n  AND td.device_pair_id IN ($device_pair)\n  AND tv.tag_id IN ($tag)\n  AND tv.scaled_numeric_value IS NOT NULL\n  AND $__timeFilter(tv.packet_timestamp)\nGROUP BY 1, 2\nORDER BY 1;",
+          "refId": "A"
+        }
+      ],
+      "title": "Scaled Analog Process Telemetry",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "RTU Buffer / Skew Delay (ms)",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "auto",
+            "spanNulls": true,
+            "stacking": { "group": "A", "mode": "none" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] },
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 35 },
+      "id": 21,
+      "options": {
+        "legend": { "calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  $__timeGroupAlias(tv.packet_timestamp, $__interval),\n  td.tag_name AS metric,\n  ROUND(AVG(EXTRACT(EPOCH FROM (tv.packet_timestamp - tv.event_timestamp)) * 1000.0)::numeric, 2) AS value\nFROM tag_values tv\nJOIN tag_definitions td ON tv.tag_id = td.id\nWHERE tv.session_id = '$session'\n  AND td.device_pair_id IN ($device_pair)\n  AND tv.tag_id IN ($tag)\n  AND tv.event_timestamp IS NOT NULL\n  AND $__timeFilter(tv.packet_timestamp)\nGROUP BY 1, 2\nORDER BY 1;",
+          "refId": "A"
+        }
+      ],
+      "title": "DNP3 RTU Event vs Packet Latency Skew (Δt)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": { "fillOpacity": 70, "lineWidth": 0, "spanNulls": false },
+          "mappings": [
+            {
+              "options": {
+                "0": { "color": "dark-blue", "index": 0, "text": "FALSE / OFF" },
+                "1": { "color": "green", "index": 1, "text": "TRUE / ON" }
+              },
+              "type": "value"
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "dark-blue", "value": null },
+              { "color": "green", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 43 },
+      "id": 22,
+      "options": {
+        "alignValue": "left",
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "mergeValues": true,
+        "rowHeight": 0.9,
+        "showValue": "auto",
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  tv.packet_timestamp AS \"time\",\n  td.tag_name AS metric,\n  CASE WHEN tv.boolean_value = TRUE THEN 1 ELSE 0 END AS value\nFROM tag_values tv\nJOIN tag_definitions td ON tv.tag_id = td.id\nWHERE tv.session_id = '$session'\n  AND td.device_pair_id IN ($device_pair)\n  AND tv.tag_id IN ($tag)\n  AND tv.boolean_value IS NOT NULL\n  AND $__timeFilter(tv.packet_timestamp)\nORDER BY 1;",
+          "refId": "A"
+        }
+      ],
+      "title": "Discrete & Boolean Signal State Timeline",
+      "type": "state-timeline"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": { "align": "auto", "displayMode": "auto", "filterable": true, "inspect": true },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Quality Flags" },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "color-text"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  { "options": { "match": "COMM_LOST", "result": { "color": "red" } }, "type": "regex" },
+                  { "options": { "match": "RESTART", "result": { "color": "orange" } }, "type": "regex" }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 49 },
+      "id": 23,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": true, "fields": "", "reducer": ["sum"], "show": true },
+        "showHeader": true,
+        "sortBy": [{ "desc": true, "displayName": "Frame #" }]
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  tv.frame_number AS \"Frame #\",\n  to_char(tv.packet_timestamp, 'YYYY-MM-DD HH24:MI:SS.MS') AS \"Packet Time\",\n  to_char(tv.event_timestamp, 'HH24:MI:SS.MS') AS \"RTU Event Time\",\n  td.tag_name AS \"Tag Name\",\n  td.protocol_address AS \"Address\",\n  COALESCE(tv.scaled_numeric_value::text, tv.boolean_value::text, tv.raw_hex) AS \"New Value\",\n  td.engineering_units AS \"Units\",\n  COALESCE(tv.quality_flags, 'NORMAL') AS \"Quality Flags\"\nFROM tag_values tv\nJOIN tag_definitions td ON tv.tag_id = td.id\nWHERE tv.session_id = '$session'\n  AND td.device_pair_id IN ($device_pair)\n  AND tv.tag_id IN ($tag)\n  AND tv.is_value_change = TRUE\n  AND $__timeFilter(tv.packet_timestamp)\nORDER BY tv.packet_timestamp DESC\nLIMIT 100;",
+          "refId": "A"
+        }
+      ],
+      "title": "State Transitions & Value Changes Log",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": { "align": "auto", "displayMode": "auto", "filterable": true, "inspect": true },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 49 },
+      "id": 24,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": true, "fields": "", "reducer": ["sum"], "show": true },
+        "showHeader": true,
+        "sortBy": [{ "desc": false, "displayName": "Tag Name" }]
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  td.tag_name AS \"Tag Name\",\n  td.protocol_address AS \"Protocol Address\",\n  td.data_type AS \"Type\",\n  td.engineering_units AS \"Units\",\n  td.scale_multiplier AS \"Scale\",\n  td.scale_offset AS \"Offset\",\n  td.initial_scaled_numeric_value AS \"Initial Scaled (T0)\",\n  td.initial_boolean_value AS \"Initial Bool (T0)\",\n  td.initial_raw_hex AS \"Initial Raw Hex\",\n  COUNT(tv.frame_number) AS \"Observations\",\n  COUNT(tv.frame_number) FILTER (WHERE tv.is_value_change) AS \"Transitions\"\nFROM tag_definitions td\nLEFT JOIN tag_values tv ON td.id = tv.tag_id AND tv.session_id = '$session'\nWHERE td.device_pair_id IN ($device_pair)\nGROUP BY td.id, td.tag_name, td.protocol_address, td.data_type, td.engineering_units,\n         td.scale_multiplier, td.scale_offset, td.initial_scaled_numeric_value,\n         td.initial_boolean_value, td.initial_raw_hex\nORDER BY td.tag_name;",
+          "refId": "A"
+        }
+      ],
+      "title": "Tag Manifest & T0 Baseline State Catalog",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 57 },
+      "id": 25,
+      "title": "Control Command Events & Replay Audit",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "fillOpacity": 80, "lineWidth": 0, "spanNulls": false },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 58 },
+      "id": 26,
+      "options": {
+        "alignValue": "left",
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "mergeValues": false,
+        "rowHeight": 0.9,
+        "showValue": "auto",
+        "tooltip": { "mode": "single", "sort": "none" }
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  timestamp AS \"time\",\n  protocol || ': ' || target_address || ' (' || COALESCE(control_action, command_type) || ')' AS metric,\n  1 AS value\nFROM captured_command_events\nWHERE session_id = '$session'\n  AND device_pair_id IN ($device_pair)\n  AND $__timeFilter(timestamp)\nORDER BY 1;",
+          "refId": "A"
+        }
+      ],
+      "title": "Control Command Activity Timeline",
+      "type": "state-timeline"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "hideFrom": { "legend": false, "tooltip": false, "viz": false } },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 6, "x": 12, "y": 58 },
+      "id": 27,
+      "options": {
+        "displayLabels": ["percent"],
+        "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true, "values": ["value"] },
+        "pieType": "donut",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "tooltip": { "mode": "single", "sort": "desc" }
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  command_type AS metric,\n  COUNT(*) AS value\nFROM captured_command_events\nWHERE session_id = '$session'\n  AND device_pair_id IN ($device_pair)\n  AND $__timeFilter(timestamp)\nGROUP BY command_type\nORDER BY value DESC;",
+          "refId": "A"
+        }
+      ],
+      "title": "Commands by Type",
+      "type": "piechart"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 6, "x": 18, "y": 58 },
+      "id": 28,
+      "options": {
+        "displayMode": "gradient",
+        "minVizHeight": 10,
+        "minVizWidth": 0,
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "showUnfilled": true
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  COALESCE(control_action, 'MODBUS_NUMERIC') AS \"Control Action\",\n  COUNT(*) AS \"Count\"\nFROM captured_command_events\nWHERE session_id = '$session'\n  AND device_pair_id IN ($device_pair)\n  AND $__timeFilter(timestamp)\nGROUP BY control_action\nORDER BY \"Count\" DESC;",
+          "refId": "A"
+        }
+      ],
+      "title": "Control Actions (DNP3 CROB / Modbus)",
+      "type": "bargauge"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": { "align": "auto", "displayMode": "auto", "filterable": true, "inspect": true },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Action" },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "color-text"
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  { "options": { "TRIP": { "color": "red", "index": 0 } }, "type": "value" },
+                  { "options": { "CLOSE": { "color": "green", "index": 1 } }, "type": "value" },
+                  { "options": { "LATCH_ON": { "color": "blue", "index": 2 } }, "type": "value" },
+                  { "options": { "LATCH_OFF": { "color": "purple", "index": 3 } }, "type": "value" }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 65 },
+      "id": 29,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": true, "fields": "", "reducer": ["sum"], "show": true },
+        "showHeader": true,
+        "sortBy": [{ "desc": false, "displayName": "Frame #" }]
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  c.frame_number AS \"Frame #\",\n  to_char(c.timestamp, 'YYYY-MM-DD HH24:MI:SS.MS') AS \"Timestamp\",\n  dp.name AS \"Device Pair\",\n  c.protocol AS \"Protocol\",\n  c.command_type AS \"Command Type\",\n  c.target_address AS \"Target Address\",\n  COALESCE(c.control_action, '-') AS \"Action\",\n  c.command_count AS \"Count\",\n  c.pulse_on_ms AS \"Pulse On (ms)\",\n  c.pulse_off_ms AS \"Pulse Off (ms)\",\n  c.unscaled_command_value AS \"Value\",\n  '0x' || encode(c.raw_pdu_bytes, 'hex') AS \"Raw PDU Hex\"\nFROM captured_command_events c\nJOIN device_pairs dp ON c.device_pair_id = dp.id\nWHERE c.session_id = '$session'\n  AND c.device_pair_id IN ($device_pair)\n  AND $__timeFilter(c.timestamp)\nORDER BY c.frame_number ASC\nLIMIT 100;",
+          "refId": "A"
+        }
+      ],
+      "title": "Captured Control Commands Replay Audit Log",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 73 },
+      "id": 30,
+      "title": "Modbus Raw Unmapped Registers (Diagnostics & Coverage)",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "Polls / bucket",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "gradientMode": "none",
+            "hideFrom": { "legend": false, "tooltip": false, "viz": false },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": { "type": "linear" },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": { "group": "A", "mode": "normal" },
+            "thresholdsStyle": { "mode": "off" }
+          },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "yellow", "value": null }] },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 74 },
+      "id": 31,
+      "options": {
+        "legend": { "calcs": ["sum"], "displayMode": "table", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  $__timeGroupAlias(timestamp, $__interval),\n  register_type AS metric,\n  COUNT(*) AS value\nFROM modbus_raw_unmapped\nWHERE session_id = '$session'\n  AND device_pair_id IN ($device_pair)\n  AND ('$direction' = 'All' OR direction = '$direction')\n  AND $__timeFilter(timestamp)\nGROUP BY 1, 2\nORDER BY 1;",
+          "refId": "A"
+        }
+      ],
+      "title": "Unmapped Register Poll Rate Over Time",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 74 },
+      "id": 32,
+      "options": {
+        "displayMode": "gradient",
+        "minVizHeight": 10,
+        "minVizWidth": 0,
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "showUnfilled": true
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  'Unit ' || unit_id || ' | ' || register_type || ' [' || register_offset || ']' AS \"Register\",\n  COUNT(*) AS \"Poll Count\"\nFROM modbus_raw_unmapped\nWHERE session_id = '$session'\n  AND device_pair_id IN ($device_pair)\n  AND ('$direction' = 'All' OR direction = '$direction')\n  AND $__timeFilter(timestamp)\nGROUP BY unit_id, register_type, register_offset\nORDER BY \"Poll Count\" DESC\nLIMIT 15;",
+          "refId": "A"
+        }
+      ],
+      "title": "Top Unmapped Registers Queried",
+      "type": "bargauge"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": { "align": "auto", "displayMode": "auto", "filterable": true, "inspect": true },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 81 },
+      "id": 33,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": true, "fields": "", "reducer": ["sum"], "show": true },
+        "showHeader": true,
+        "sortBy": [{ "desc": true, "displayName": "Frame #" }]
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  u.frame_number AS \"Frame #\",\n  to_char(u.timestamp, 'YYYY-MM-DD HH24:MI:SS.MS') AS \"Timestamp\",\n  dp.name AS \"Device Pair\",\n  u.direction AS \"Direction\",\n  u.unit_id AS \"Unit ID\",\n  u.register_type AS \"Register Type\",\n  u.register_offset AS \"Offset\",\n  u.raw_value_hex AS \"Raw Hex Value\"\nFROM modbus_raw_unmapped u\nJOIN device_pairs dp ON u.device_pair_id = dp.id\nWHERE u.session_id = '$session'\n  AND u.device_pair_id IN ($device_pair)\n  AND ('$direction' = 'All' OR u.direction = '$direction')\n  AND $__timeFilter(u.timestamp)\nORDER BY u.frame_number DESC\nLIMIT 100;",
+          "refId": "A"
+        }
+      ],
+      "title": "Unmapped Modbus Polls Detail Log",
+      "type": "table"
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["ics", "scada", "pcap", "modbus", "dnp3", "timescaledb", "fat-sat"],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "timescaledb"
+        },
+        "definition": "SELECT id AS __value, name || ' (' || pcap_file_name || ' [' || status || '])' AS __text FROM test_sessions ORDER BY ingested_at DESC;",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Test Session",
+        "multi": false,
+        "name": "session",
+        "options": [],
+        "query": "SELECT id AS __value, name || ' (' || pcap_file_name || ' [' || status || '])' AS __text FROM test_sessions ORDER BY ingested_at DESC;",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": ["All"],
+          "value": ["$__all"]
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "timescaledb"
+        },
+        "definition": "SELECT id AS __value, name || ' [' || protocol || '] (' || client_ip::text || ' -> ' || server_ip::text || ')' AS __text FROM device_pairs WHERE session_id = '$session' ORDER BY name;",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Device Pair",
+        "multi": true,
+        "name": "device_pair",
+        "options": [],
+        "query": "SELECT id AS __value, name || ' [' || protocol || '] (' || client_ip::text || ' -> ' || server_ip::text || ')' AS __text FROM device_pairs WHERE session_id = '$session' ORDER BY name;",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "All"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Traffic Direction",
+        "multi": false,
+        "name": "direction",
+        "options": [
+          { "selected": true, "text": "All", "value": "All" },
+          { "selected": false, "text": "CLIENT_TO_SERVER", "value": "CLIENT_TO_SERVER" },
+          { "selected": false, "text": "SERVER_TO_CLIENT", "value": "SERVER_TO_CLIENT" }
+        ],
+        "query": "All, CLIENT_TO_SERVER, SERVER_TO_CLIENT",
+        "skipUrlSync": false,
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": ["All"],
+          "value": ["$__all"]
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "timescaledb"
+        },
+        "definition": "SELECT id AS __value, tag_name || ' (' || protocol_address || COALESCE(' [' || engineering_units || ']', '') || ')' AS __text FROM tag_definitions WHERE device_pair_id IN ($device_pair) ORDER BY tag_name;",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Tag / Signal",
+        "multi": true,
+        "name": "tag",
+        "options": [],
+        "query": "SELECT id AS __value, tag_name || ' (' || protocol_address || COALESCE(' [' || engineering_units || ']', '') || ')' AS __text FROM tag_definitions WHERE device_pair_id IN ($device_pair) ORDER BY tag_name;",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-2d",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": ["5s", "10s", "30s", "1m", "5m", "15m", "30m", "1h", "2h", "1d"]
+  },
+  "timezone": "browser",
+  "title": "Industrial Protocol PCAP Analyzer (FAT/SAT)",
+  "uid": "pcap-industrial-analyzer",
+  "version": 1,
+  "weekStart": ""
+}
+

@@ -58,6 +58,8 @@ services:
         condition: service_healthy
     volumes:
       - grafana_data:/var/lib/grafana
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/etc/grafana/dashboards:ro
 
 volumes:
   timescaledb_data:
