@@ -719,4 +719,314 @@ public class ModbusTcpDecoderTests
         Assert.Equal(16, fc16Tx.FunctionCode);
         Assert.Equal(25.0, fc16Tx.DurationMs!.Value, precision: 5);
     }
+
+    [Theory]
+    // 16-bit UINT16: canonical BE [0x12, 0x34] = 4660
+    [InlineData(TagDataType.UInt16, RegisterEndianness.Abcd, new byte[] { 0x12, 0x34 }, 4660.0, "1234")]
+    [InlineData(TagDataType.UInt16, RegisterEndianness.Cdab, new byte[] { 0x12, 0x34 }, 4660.0, "1234")]
+    [InlineData(TagDataType.UInt16, RegisterEndianness.Badc, new byte[] { 0x34, 0x12 }, 4660.0, "3412")]
+    [InlineData(TagDataType.UInt16, RegisterEndianness.Dcba, new byte[] { 0x34, 0x12 }, 4660.0, "3412")]
+    // 16-bit INT16: canonical BE [0xFF, 0x06] = -250
+    [InlineData(TagDataType.Int16, RegisterEndianness.Abcd, new byte[] { 0xFF, 0x06 }, -250.0, "FF06")]
+    [InlineData(TagDataType.Int16, RegisterEndianness.Cdab, new byte[] { 0xFF, 0x06 }, -250.0, "FF06")]
+    [InlineData(TagDataType.Int16, RegisterEndianness.Badc, new byte[] { 0x06, 0xFF }, -250.0, "06FF")]
+    [InlineData(TagDataType.Int16, RegisterEndianness.Dcba, new byte[] { 0x06, 0xFF }, -250.0, "06FF")]
+    // 32-bit INT32: canonical BE [0xFF, 0xFE, 0x79, 0x60] = -100,000
+    [InlineData(TagDataType.Int32, RegisterEndianness.Abcd, new byte[] { 0xFF, 0xFE, 0x79, 0x60 }, -100000.0, "FFFE7960")]
+    [InlineData(TagDataType.Int32, RegisterEndianness.Cdab, new byte[] { 0x79, 0x60, 0xFF, 0xFE }, -100000.0, "7960FFFE")]
+    [InlineData(TagDataType.Int32, RegisterEndianness.Badc, new byte[] { 0xFE, 0xFF, 0x60, 0x79 }, -100000.0, "FEFF6079")]
+    [InlineData(TagDataType.Int32, RegisterEndianness.Dcba, new byte[] { 0x60, 0x79, 0xFE, 0xFF }, -100000.0, "6079FEFF")]
+    // 32-bit UINT32: canonical BE [0xB2, 0xD0, 0x5E, 0x01] = 3,000,000,001
+    [InlineData(TagDataType.UInt32, RegisterEndianness.Abcd, new byte[] { 0xB2, 0xD0, 0x5E, 0x01 }, 3000000001.0, "B2D05E01")]
+    [InlineData(TagDataType.UInt32, RegisterEndianness.Cdab, new byte[] { 0x5E, 0x01, 0xB2, 0xD0 }, 3000000001.0, "5E01B2D0")]
+    [InlineData(TagDataType.UInt32, RegisterEndianness.Badc, new byte[] { 0xD0, 0xB2, 0x01, 0x5E }, 3000000001.0, "D0B2015E")]
+    [InlineData(TagDataType.UInt32, RegisterEndianness.Dcba, new byte[] { 0x01, 0x5E, 0xD0, 0xB2 }, 3000000001.0, "015ED0B2")]
+    // 32-bit FLOAT32: canonical BE [0x42, 0x49, 0x00, 0x00] = 50.25f
+    [InlineData(TagDataType.Float32, RegisterEndianness.Abcd, new byte[] { 0x42, 0x49, 0x00, 0x00 }, 50.25, "42490000")]
+    [InlineData(TagDataType.Float32, RegisterEndianness.Cdab, new byte[] { 0x00, 0x00, 0x42, 0x49 }, 50.25, "00004249")]
+    [InlineData(TagDataType.Float32, RegisterEndianness.Badc, new byte[] { 0x49, 0x42, 0x00, 0x00 }, 50.25, "49420000")]
+    [InlineData(TagDataType.Float32, RegisterEndianness.Dcba, new byte[] { 0x00, 0x00, 0x49, 0x42 }, 50.25, "00004942")]
+    // 64-bit INT64: canonical BE [0xFF, 0xFF, 0xFF, 0xFE, 0xD5, 0xFA, 0x0E, 0x01] = -4,999,999,999
+    [InlineData(TagDataType.Int64, RegisterEndianness.Abcd, new byte[] { 0xFF, 0xFF, 0xFF, 0xFE, 0xD5, 0xFA, 0x0E, 0x01 }, -4999999999.0, "FFFFFFFED5FA0E01")]
+    [InlineData(TagDataType.Int64, RegisterEndianness.Cdab, new byte[] { 0x0E, 0x01, 0xD5, 0xFA, 0xFF, 0xFE, 0xFF, 0xFF }, -4999999999.0, "0E01D5FAFFFEFFFF")]
+    [InlineData(TagDataType.Int64, RegisterEndianness.Badc, new byte[] { 0xFF, 0xFF, 0xFE, 0xFF, 0xFA, 0xD5, 0x01, 0x0E }, -4999999999.0, "FFFFFEFFFAD5010E")]
+    [InlineData(TagDataType.Int64, RegisterEndianness.Dcba, new byte[] { 0x01, 0x0E, 0xFA, 0xD5, 0xFE, 0xFF, 0xFF, 0xFF }, -4999999999.0, "010EFAD5FEFFFFFF")]
+    // 64-bit UINT64: canonical BE [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07] = 283,686,952,306,183
+    [InlineData(TagDataType.UInt64, RegisterEndianness.Abcd, new byte[] { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07 }, 283686952306183.0, "0001020304050607")]
+    [InlineData(TagDataType.UInt64, RegisterEndianness.Cdab, new byte[] { 0x06, 0x07, 0x04, 0x05, 0x02, 0x03, 0x00, 0x01 }, 283686952306183.0, "0607040502030001")]
+    [InlineData(TagDataType.UInt64, RegisterEndianness.Badc, new byte[] { 0x01, 0x00, 0x03, 0x02, 0x05, 0x04, 0x07, 0x06 }, 283686952306183.0, "0100030205040706")]
+    [InlineData(TagDataType.UInt64, RegisterEndianness.Dcba, new byte[] { 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x00 }, 283686952306183.0, "0706050403020100")]
+    // 64-bit FLOAT64: canonical BE [0x40, 0x5E, 0xDD, 0x2F, 0x1A, 0x9F, 0xBE, 0x77] = 123.456
+    [InlineData(TagDataType.Float64, RegisterEndianness.Abcd, new byte[] { 0x40, 0x5E, 0xDD, 0x2F, 0x1A, 0x9F, 0xBE, 0x77 }, 123.456, "405EDD2F1A9FBE77")]
+    [InlineData(TagDataType.Float64, RegisterEndianness.Cdab, new byte[] { 0xBE, 0x77, 0x1A, 0x9F, 0xDD, 0x2F, 0x40, 0x5E }, 123.456, "BE771A9FDD2F405E")]
+    [InlineData(TagDataType.Float64, RegisterEndianness.Badc, new byte[] { 0x5E, 0x40, 0x2F, 0xDD, 0x9F, 0x1A, 0x77, 0xBE }, 123.456, "5E402FDD9F1A77BE")]
+    [InlineData(TagDataType.Float64, RegisterEndianness.Dcba, new byte[] { 0x77, 0xBE, 0x9F, 0x1A, 0x2F, 0xDD, 0x5E, 0x40 }, 123.456, "77BE9F1A2FDD5E40")]
+    public void ProcessFrame_Fc03ReadHoldingRegisters_UnpacksAllDataTypesAndEndiannessModesAndPreservesWireRawHex(
+        TagDataType dataType,
+        RegisterEndianness endianness,
+        byte[] wireRegisterBytes,
+        double expectedUnscaledValue,
+        string expectedRawHex)
+    {
+        var tagId = Guid.Parse("70000000-0000-0000-0000-000000000001");
+        var trailingTagId = Guid.Parse("70000000-0000-0000-0000-000000000002");
+        int tagRegisterCount = wireRegisterBytes.Length / 2;
+
+        var tags = new[]
+        {
+            new TagDefinition(
+                Id: tagId,
+                DevicePairId: PairId,
+                TagName: "Primary_Tag",
+                ProtocolAddress: ProtocolAddress.Parse("HR:40001"),
+                DataType: dataType,
+                ScaleMultiplier: 2.0,
+                ScaleOffset: 1.0,
+                EngineeringUnits: null,
+                Description: null,
+                Endianness: endianness),
+            new TagDefinition(
+                Id: trailingTagId,
+                DevicePairId: PairId,
+                TagName: "Trailing_Sentinel",
+                ProtocolAddress: ProtocolAddress.Parse($"HR:{40001 + tagRegisterCount}"),
+                DataType: TagDataType.UInt16,
+                ScaleMultiplier: 1.0,
+                ScaleOffset: 0.0,
+                EngineeringUnits: null,
+                Description: null,
+                Endianness: RegisterEndianness.Abcd)
+        };
+
+        var pair = CreatePair(unitId: 1);
+        var redEngine = new VirtualClockRedEngine(timeoutThresholdMs: 2000);
+        var tagEngine = new TagResolutionEngine(tags);
+        var decoder = new ModbusTcpDecoder(redEngine, tagEngine, storeUnmappedRegisters: true);
+
+        ushort totalQuantity = (ushort)(tagRegisterCount + 1);
+        byte[] reqPayload =
+        [
+            0x00, 0x31, 0x00, 0x00, 0x00, 0x06, 0x01,
+            0x03, 0x00, 0x00, (byte)(totalQuantity >> 8), (byte)(totalQuantity & 0xFF)
+        ];
+        decoder.ProcessFrame(CreateFrame(1, BaseTime, TrafficDirection.ClientToServer, reqPayload), pair, TrafficDirection.ClientToServer);
+
+        byte byteCount = (byte)(totalQuantity * 2);
+        ushort mbapLen = (ushort)(3 + byteCount);
+        byte[] respPayload = new byte[6 + mbapLen];
+        respPayload[0] = 0x00;
+        respPayload[1] = 0x31;
+        respPayload[4] = (byte)(mbapLen >> 8);
+        respPayload[5] = (byte)(mbapLen & 0xFF);
+        respPayload[6] = 0x01;
+        respPayload[7] = 0x03;
+        respPayload[8] = byteCount;
+        wireRegisterBytes.CopyTo(respPayload, 9);
+        // Trailing sentinel register = 0x002A (42)
+        respPayload[9 + wireRegisterBytes.Length] = 0x00;
+        respPayload[10 + wireRegisterBytes.Length] = 0x2A;
+
+        var output = decoder.ProcessFrame(
+            CreateFrame(2, BaseTime.AddMilliseconds(10), TrafficDirection.ServerToClient, respPayload),
+            pair,
+            TrafficDirection.ServerToClient);
+
+        Assert.Equal(2, output.DataPoints.Count);
+        Assert.Empty(output.UnmappedRegisters);
+
+        var primaryDp = output.DataPoints[0];
+        Assert.Equal(tagId, primaryDp.TagId);
+        Assert.Equal(expectedUnscaledValue, primaryDp.UnscaledNumericValue!.Value, precision: 6);
+        Assert.Equal((expectedUnscaledValue * 2.0) + 1.0, primaryDp.ScaledNumericValue!.Value, precision: 6);
+        Assert.Equal(expectedRawHex, primaryDp.RawHex);
+
+        var trailingDp = output.DataPoints[1];
+        Assert.Equal(trailingTagId, trailingDp.TagId);
+        Assert.Equal(42.0, trailingDp.UnscaledNumericValue);
+        Assert.Equal("002A", trailingDp.RawHex);
+    }
+
+    [Theory]
+    [InlineData(TagDataType.UInt32, 1)]
+    [InlineData(TagDataType.Int64, 1)]
+    [InlineData(TagDataType.UInt64, 2)]
+    [InlineData(TagDataType.Float64, 3)]
+    public void ProcessFrame_Fc03ReadRegisters_SkipsIncompleteMultiRegisterTagWhenFewerRegistersRemainInFrame(
+        TagDataType multiRegType,
+        int availableRegisters)
+    {
+        var incompleteTagId = Guid.Parse("71000000-0000-0000-0000-000000000001");
+        var tags = new[]
+        {
+            new TagDefinition(
+                Id: incompleteTagId,
+                DevicePairId: PairId,
+                TagName: "Incomplete_Tag",
+                ProtocolAddress: ProtocolAddress.Parse("HR:40001"),
+                DataType: multiRegType,
+                ScaleMultiplier: 1.0,
+                ScaleOffset: 0.0,
+                EngineeringUnits: null,
+                Description: null,
+                Endianness: RegisterEndianness.Abcd)
+        };
+
+        var pair = CreatePair(unitId: 1);
+        var redEngine = new VirtualClockRedEngine(timeoutThresholdMs: 2000);
+        var tagEngine = new TagResolutionEngine(tags);
+        var decoder = new ModbusTcpDecoder(redEngine, tagEngine, storeUnmappedRegisters: false);
+
+        byte[] reqPayload =
+        [
+            0x00, 0x32, 0x00, 0x00, 0x00, 0x06, 0x01,
+            0x03, 0x00, 0x00, 0x00, (byte)availableRegisters
+        ];
+        decoder.ProcessFrame(CreateFrame(1, BaseTime, TrafficDirection.ClientToServer, reqPayload), pair, TrafficDirection.ClientToServer);
+
+        byte byteCount = (byte)(availableRegisters * 2);
+        ushort mbapLen = (ushort)(3 + byteCount);
+        byte[] respPayload = new byte[6 + mbapLen];
+        respPayload[0] = 0x00;
+        respPayload[1] = 0x32;
+        respPayload[4] = (byte)(mbapLen >> 8);
+        respPayload[5] = (byte)(mbapLen & 0xFF);
+        respPayload[6] = 0x01;
+        respPayload[7] = 0x03;
+        respPayload[8] = byteCount;
+        for (int i = 0; i < byteCount; i++)
+        {
+            respPayload[9 + i] = (byte)(i + 1);
+        }
+
+        var output = decoder.ProcessFrame(
+            CreateFrame(2, BaseTime.AddMilliseconds(10), TrafficDirection.ServerToClient, respPayload),
+            pair,
+            TrafficDirection.ServerToClient);
+
+        Assert.Single(output.Transactions);
+        Assert.Empty(output.DataPoints);
+    }
+
+    [Theory]
+    // 1-register writes (FC 16 Quantity = 1) with endianness
+    [InlineData(TagDataType.Int16, RegisterEndianness.Badc, new byte[] { 0x06, 0xFF }, -250.0, "06FF")]
+    [InlineData(TagDataType.UInt16, RegisterEndianness.Dcba, new byte[] { 0x34, 0x12 }, 4660.0, "3412")]
+    // 2-register writes (FC 16 Quantity = 2) for 32-bit types
+    [InlineData(TagDataType.UInt32, RegisterEndianness.Cdab, new byte[] { 0x5E, 0x01, 0xB2, 0xD0 }, 3000000001.0, "5E01B2D0")]
+    [InlineData(TagDataType.Int32, RegisterEndianness.Dcba, new byte[] { 0x60, 0x79, 0xFE, 0xFF }, -100000.0, "6079FEFF")]
+    [InlineData(TagDataType.Float32, RegisterEndianness.Badc, new byte[] { 0x49, 0x42, 0x00, 0x00 }, 50.25, "49420000")]
+    // 4-register writes (FC 16 Quantity = 4) for 64-bit types
+    [InlineData(TagDataType.Int64, RegisterEndianness.Cdab, new byte[] { 0x0E, 0x01, 0xD5, 0xFA, 0xFF, 0xFE, 0xFF, 0xFF }, -4999999999.0, "0E01D5FAFFFEFFFF")]
+    [InlineData(TagDataType.UInt64, RegisterEndianness.Badc, new byte[] { 0x01, 0x00, 0x03, 0x02, 0x05, 0x04, 0x07, 0x06 }, 283686952306183.0, "0100030205040706")]
+    [InlineData(TagDataType.Float64, RegisterEndianness.Dcba, new byte[] { 0x77, 0xBE, 0x9F, 0x1A, 0x2F, 0xDD, 0x5E, 0x40 }, 123.456, "77BE9F1A2FDD5E40")]
+    public void ProcessFrame_Fc16WriteMultipleRegisters_PopulatesUnscaledCommandValueAndDataPointForSingleTagAcrossWidthsAndEndianness(
+        TagDataType dataType,
+        RegisterEndianness endianness,
+        byte[] wireRegisterBytes,
+        double expectedUnscaledValue,
+        string expectedRawHex)
+    {
+        var tagId = Guid.Parse("72000000-0000-0000-0000-000000000001");
+        var tag = new TagDefinition(
+            Id: tagId,
+            DevicePairId: PairId,
+            TagName: "Command_Target_Tag",
+            ProtocolAddress: ProtocolAddress.Parse("HR:40011"),
+            DataType: dataType,
+            ScaleMultiplier: 1.0,
+            ScaleOffset: 0.0,
+            EngineeringUnits: null,
+            Description: null,
+            Endianness: endianness);
+
+        var pair = CreatePair(unitId: 1);
+        var redEngine = new VirtualClockRedEngine(timeoutThresholdMs: 2000);
+        var tagEngine = new TagResolutionEngine([tag]);
+        var decoder = new ModbusTcpDecoder(redEngine, tagEngine, storeUnmappedRegisters: false);
+
+        ushort quantity = (ushort)(wireRegisterBytes.Length / 2);
+        byte byteCount = (byte)wireRegisterBytes.Length;
+        ushort mbapLen = (ushort)(7 + byteCount);
+        byte[] reqPayload = new byte[6 + mbapLen];
+        reqPayload[0] = 0x00;
+        reqPayload[1] = 0x40;
+        reqPayload[4] = (byte)(mbapLen >> 8);
+        reqPayload[5] = (byte)(mbapLen & 0xFF);
+        reqPayload[6] = 0x01;
+        reqPayload[7] = 0x10; // FC 16
+        reqPayload[8] = 0x00;
+        reqPayload[9] = 0x0A; // StartAddress = 10 -> HR:40011
+        reqPayload[10] = (byte)(quantity >> 8);
+        reqPayload[11] = (byte)(quantity & 0xFF);
+        reqPayload[12] = byteCount;
+        wireRegisterBytes.CopyTo(reqPayload, 13);
+
+        var output = decoder.ProcessFrame(
+            CreateFrame(10, BaseTime, TrafficDirection.ClientToServer, reqPayload),
+            pair,
+            TrafficDirection.ClientToServer);
+
+        var cmd = Assert.Single(output.CommandEvents);
+        Assert.Equal(CommandType.ModbusWriteMultiRegs, cmd.CommandType);
+        Assert.Equal(ProtocolAddress.Parse("HR:40011"), cmd.TargetAddress);
+        Assert.Equal((short)quantity, cmd.CommandCount);
+        Assert.NotNull(cmd.UnscaledCommandValue);
+        Assert.Equal(expectedUnscaledValue, cmd.UnscaledCommandValue!.Value, precision: 6);
+
+        var dp = Assert.Single(output.DataPoints);
+        Assert.Equal(tagId, dp.TagId);
+        Assert.Equal(expectedUnscaledValue, dp.UnscaledNumericValue!.Value, precision: 6);
+        Assert.Equal(expectedRawHex, dp.RawHex);
+    }
+
+    [Fact]
+    public void ProcessFrame_Fc06WriteSingleRegister_RespectsMapped16BitEndiannessAndDefaultsUnmappedToUInt16Abcd()
+    {
+        var swappedTagId = Guid.Parse("73000000-0000-0000-0000-000000000001");
+        var tags = new[]
+        {
+            new TagDefinition(
+                Id: swappedTagId,
+                DevicePairId: PairId,
+                TagName: "Swapped_Int16_Setpoint",
+                ProtocolAddress: ProtocolAddress.Parse("HR:40005"),
+                DataType: TagDataType.Int16,
+                ScaleMultiplier: 0.1,
+                ScaleOffset: 0.0,
+                EngineeringUnits: "C",
+                Description: null,
+                Endianness: RegisterEndianness.Badc)
+        };
+
+        var pair = CreatePair(unitId: 1);
+        var redEngine = new VirtualClockRedEngine(timeoutThresholdMs: 2000);
+        var tagEngine = new TagResolutionEngine(tags);
+        var decoder = new ModbusTcpDecoder(redEngine, tagEngine, storeUnmappedRegisters: false);
+
+        // 1. Mapped HR:40005 (offset 4) with BADC wire bytes [0x06, 0xFF] -> BE [0xFF, 0x06] = -250
+        byte[] mappedFc06 = [0x00, 0x50, 0x00, 0x00, 0x00, 0x06, 0x01, 0x06, 0x00, 0x04, 0x06, 0xFF];
+        var mappedOut = decoder.ProcessFrame(
+            CreateFrame(1, BaseTime, TrafficDirection.ClientToServer, mappedFc06),
+            pair,
+            TrafficDirection.ClientToServer);
+
+        var mappedCmd = Assert.Single(mappedOut.CommandEvents);
+        Assert.Equal(-250.0, mappedCmd.UnscaledCommandValue);
+        var mappedDp = Assert.Single(mappedOut.DataPoints);
+        Assert.Equal(-250.0, mappedDp.UnscaledNumericValue);
+        Assert.Equal(-25.0, mappedDp.ScaledNumericValue!.Value, precision: 5);
+        Assert.Equal("06FF", mappedDp.RawHex);
+
+        // 2. Unmapped HR:40099 (offset 98 = 0x0062) with wire bytes [0x12, 0x34] -> default UINT16 ABCD = 4660
+        byte[] unmappedFc06 = [0x00, 0x51, 0x00, 0x00, 0x00, 0x06, 0x01, 0x06, 0x00, 0x62, 0x12, 0x34];
+        var unmappedOut = decoder.ProcessFrame(
+            CreateFrame(2, BaseTime.AddMilliseconds(20), TrafficDirection.ClientToServer, unmappedFc06),
+            pair,
+            TrafficDirection.ClientToServer);
+
+        var unmappedCmd = Assert.Single(unmappedOut.CommandEvents);
+        Assert.Equal(ProtocolAddress.Parse("HR:40099"), unmappedCmd.TargetAddress);
+        Assert.Equal(4660.0, unmappedCmd.UnscaledCommandValue);
+        Assert.Empty(unmappedOut.DataPoints);
+    }
 }

@@ -113,7 +113,8 @@ CREATE TABLE tag_definitions (
     device_pair_id UUID NOT NULL REFERENCES device_pairs(id) ON DELETE CASCADE,
     tag_name VARCHAR(255) NOT NULL,
     protocol_address VARCHAR(100) NOT NULL,   -- e.g. 'HR:40001', 'COIL:00012', 'G30V02:Idx4'
-    data_type VARCHAR(50) NOT NULL,           -- 'BOOL', 'INT16', 'UINT16', 'INT32', 'FLOAT32_BE', 'FLOAT32_SWAPPED'
+    data_type VARCHAR(50) NOT NULL,           -- 'BOOL', 'INT16', 'UINT16', 'INT32', 'UINT32', 'INT64', 'UINT64', 'FLOAT32', 'FLOAT64'
+    endianness VARCHAR(10) NOT NULL DEFAULT 'ABCD', -- 'ABCD', 'DCBA', 'BADC', 'CDAB'
     scale_multiplier DOUBLE PRECISION NOT NULL DEFAULT 1.0,
     scale_offset DOUBLE PRECISION NOT NULL DEFAULT 0.0,
     engineering_units VARCHAR(50),
@@ -263,8 +264,19 @@ public enum TagDataType
     Int16,
     UInt16,
     Int32,
-    Float32Be,
-    Float32Swapped
+    UInt32,
+    Int64,
+    UInt64,
+    Float32,
+    Float64
+}
+
+public enum RegisterEndianness
+{
+    Abcd,
+    Dcba,
+    Badc,
+    Cdab
 }
 
 public enum TransactionErrorType
@@ -371,7 +383,8 @@ public record TagDefinition(
     double ScaleMultiplier,
     double ScaleOffset,
     string? EngineeringUnits,
-    string? Description
+    string? Description,
+    RegisterEndianness Endianness = RegisterEndianness.Abcd
 )
 {
     public double ComputeScaledValue(double unscaledValue) => (unscaledValue * ScaleMultiplier) + ScaleOffset;
@@ -534,12 +547,12 @@ public interface IDataSink
 
 ### B. Tag Mapping CSV Format
 ```csv
-Protocol,Address,TagName,DataType,ScaleMultiplier,ScaleOffset,Units,Description
-ModbusTCP,HR:40001,Bus_Volts_A,FLOAT32_BE,0.1,0.0,kV,Phase A Bus Voltage
-ModbusTCP,COIL:00005,Breaker_52A,BOOL,1.0,0.0,,Breaker Status
-DNP3,G30V02:Idx0,Feeder_MW,INT16,0.01,0.0,MW,Active Power
-DNP3,G01V02:Idx4,Relay_Trip_State,BOOL,1.0,0.0,,Protection Trip
-DNP3,G12V01:Idx0,Breaker_Trip_Cmd,BOOL,1.0,0.0,,CROB Control Point
+Protocol,Address,TagName,DataType,Endianness,ScaleMultiplier,ScaleOffset,Units,Description
+ModbusTCP,HR:40001,Bus_Volts_A,FLOAT32,ABCD,0.1,0.0,kV,Phase A Bus Voltage
+ModbusTCP,COIL:00005,Breaker_52A,BOOL,,1.0,0.0,,Breaker Status
+DNP3,G30V02:Idx0,Feeder_MW,INT16,,0.01,0.0,MW,Active Power
+DNP3,G01V02:Idx4,Relay_Trip_State,BOOL,,1.0,0.0,,Protection Trip
+DNP3,G12V01:Idx0,Breaker_Trip_Cmd,BOOL,,1.0,0.0,,CROB Control Point
 ```
 
 ---
@@ -654,7 +667,7 @@ Agents should execute this build in **6 sequential milestones**, running `dotnet
   - Implement all domain records, interfaces, `VirtualClockRedEngine`, and `TagResolutionEngine` (with `LastKnownStateCache` and $T_0$ initial value capture).
   - Write unit tests verifying virtual-clock timeout expiration, request/response latency calculation, linear scaling math, and state-change detection.
 - **Milestone 2: Modbus TCP Decoder (`Analyzer.Decoders.Modbus`)**
-  - Implement MBAP header parsing, Function Codes `01, 02, 03, 04, 05, 06, 15, 16`, exception detection (`FC >= 0x80`), data type unpacking (`INT16`, `UINT16`, `FLOAT32_BE`, `FLOAT32_SWAPPED`, `BOOL`), command event extraction, and unmapped register capture.
+  - Implement MBAP header parsing, Function Codes `01, 02, 03, 04, 05, 06, 15, 16`, exception detection (`FC >= 0x80`), data type unpacking (`INT16`, `UINT16`, `INT32`, `UINT32`, `INT64`, `UINT64`, `FLOAT32`, `FLOAT64`, `BOOL`) across `ABCD`, `DCBA`, `BADC`, and `CDAB` register endianness modes, command event extraction, and unmapped register capture.
   - Write unit tests using raw byte arrays for every Function Code and exception path.
 - **Milestone 3: DNP3 Decoder & Handler Registry (`Analyzer.Decoders.Dnp3`)**
   - Implement Link/Transport/Application header parsing, sequence number tracking, IIN bit decoding, and `Dnp3HandlerRegistry`.

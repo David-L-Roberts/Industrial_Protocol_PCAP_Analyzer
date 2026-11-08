@@ -276,8 +276,15 @@ public class ModbusTcpDecoder : IProtocolDecoder
         {
             commandType = CommandType.ModbusWriteSingleReg;
             ReadOnlySpan<byte> valueBytes = pdu.Slice(3, 2);
-            unscaledCommandValue = ReadSingleRegisterCommandValue(valueBytes, hasTag, tag);
-            ExtractRegisters(extractionContext, startAddress, requestedQuantity: 1, valueBytes, dataPoints, unmappedRegisters);
+            unscaledCommandValue = ExtractRegistersAndComputeCommandValue(
+                extractionContext,
+                startAddress,
+                quantity: 1,
+                valueBytes,
+                hasTag,
+                tag,
+                dataPoints,
+                unmappedRegisters);
         }
         else if (writeFc == ModbusFunctionCode.WriteMultipleCoils)
         {
@@ -294,24 +301,15 @@ public class ModbusTcpDecoder : IProtocolDecoder
             commandType = CommandType.ModbusWriteMultiRegs;
             int byteCount = pdu[5];
             ReadOnlySpan<byte> dataBytes = pdu.Slice(6, byteCount);
-            int pointsBefore = dataPoints.Count;
-            ExtractRegisters(extractionContext, startAddress, quantity, dataBytes, dataPoints, unmappedRegisters);
-
-            if (quantity == 1)
-            {
-                unscaledCommandValue = ReadSingleRegisterCommandValue(dataBytes[..2], hasTag, tag);
-            }
-            else if (quantity == 2 &&
-                     hasTag &&
-                     tag.DataType is TagDataType.Int32 or TagDataType.Float32 &&
-                     dataPoints.Count == pointsBefore + 1)
-            {
-                unscaledCommandValue = dataPoints[pointsBefore].UnscaledNumericValue;
-            }
-            else
-            {
-                unscaledCommandValue = null;
-            }
+            unscaledCommandValue = ExtractRegistersAndComputeCommandValue(
+                extractionContext,
+                startAddress,
+                quantity,
+                dataBytes,
+                hasTag,
+                tag,
+                dataPoints,
+                unmappedRegisters);
         }
 
         commandEvents.Add(new CapturedCommandEventRecord(
@@ -332,10 +330,35 @@ public class ModbusTcpDecoder : IProtocolDecoder
             RawPduBytes: extractionContext.Frame.RawApplicationPayload.ToArray()));
     }
 
-    private static double ReadSingleRegisterCommandValue(ReadOnlySpan<byte> twoBytes, bool hasTag, TagDefinition? tag) =>
-        hasTag && tag is not null && tag.DataType == TagDataType.Int16
-            ? BinaryPrimitives.ReadInt16BigEndian(twoBytes)
-            : BinaryPrimitives.ReadUInt16BigEndian(twoBytes);
+    private double? ExtractRegistersAndComputeCommandValue(
+        FrameExtractionContext extractionContext,
+        ushort startAddress,
+        ushort quantity,
+        ReadOnlySpan<byte> dataBytes,
+        bool hasTag,
+        TagDefinition? tag,
+        List<ExtractedDataPointRecord> dataPoints,
+        List<ModbusUnmappedRecord> unmappedRegisters)
+    {
+        int pointsBefore = dataPoints.Count;
+        ExtractRegisters(extractionContext, startAddress, quantity, dataBytes, dataPoints, unmappedRegisters);
+
+        if (hasTag &&
+            tag is not null &&
+            GetRegisterWidth(tag.DataType) == quantity &&
+            dataPoints.Count == pointsBefore + 1)
+        {
+            var point = dataPoints[pointsBefore];
+            return point.UnscaledNumericValue ?? (point.BooleanValue.HasValue ? (point.BooleanValue.Value ? 1.0 : 0.0) : null);
+        }
+
+        if (!hasTag && quantity == 1)
+        {
+            return BinaryPrimitives.ReadUInt16BigEndian(dataBytes[..2]);
+        }
+
+        return null;
+    }
 
     private void ExtractBits(
         FrameExtractionContext context,
@@ -382,45 +405,30 @@ public class ModbusTcpDecoder : IProtocolDecoder
             int wireOffset = startAddress + regIndex;
             if (TryFindMappedTag(context.Pair.Id, context.RegisterType, wireOffset, out var tag))
             {
-                bool is32Bit = tag.DataType is TagDataType.Int32 or TagDataType.Float32;
-                if (is32Bit)
+                int registerWidth = GetRegisterWidth(tag.DataType);
+                if (regIndex + registerWidth <= availableRegisters)
                 {
-                    if (regIndex + 1 < availableRegisters)
+                    ReadOnlySpan<byte> rawSlice = dataBytes.Slice(regIndex * 2, registerWidth * 2);
+                    string rawHex = Convert.ToHexString(rawSlice);
+
+                    if (tag.DataType == TagDataType.Bool)
                     {
-                        ReadOnlySpan<byte> fourBytes = dataBytes.Slice(regIndex * 2, 4);
-                        double unscaled = Unpack32BitRegister(tag.DataType, tag.Endianness, fourBytes);
-                        string rawHex = Convert.ToHexString(fourBytes);
-                        ProjectTagPoint(context, tag.ProtocolAddress, unscaled, null, rawHex, dataPoints);
-                        regIndex += 2;
+                        bool boolVal = BinaryPrimitives.ReadUInt16BigEndian(rawSlice) != 0;
+                        ProjectTagPoint(context, tag.ProtocolAddress, null, boolVal, rawHex, dataPoints);
                     }
                     else
                     {
-                        regIndex++;
+                        double unscaled = UnpackNumericRegister(tag.DataType, tag.Endianness, rawSlice);
+                        ProjectTagPoint(context, tag.ProtocolAddress, unscaled, null, rawHex, dataPoints);
                     }
 
-                    continue;
+                    regIndex += registerWidth;
                 }
-
-                ReadOnlySpan<byte> twoBytes = dataBytes.Slice(regIndex * 2, 2);
-                string regHex = Convert.ToHexString(twoBytes);
-                double? unscaledNumeric = null;
-                bool? boolVal = null;
-
-                switch (tag.DataType)
+                else
                 {
-                    case TagDataType.Int16:
-                        unscaledNumeric = BinaryPrimitives.ReadInt16BigEndian(twoBytes);
-                        break;
-                    case TagDataType.UInt16:
-                        unscaledNumeric = BinaryPrimitives.ReadUInt16BigEndian(twoBytes);
-                        break;
-                    case TagDataType.Bool:
-                        boolVal = BinaryPrimitives.ReadUInt16BigEndian(twoBytes) != 0;
-                        break;
+                    regIndex++;
                 }
 
-                ProjectTagPoint(context, tag.ProtocolAddress, unscaledNumeric, boolVal, regHex, dataPoints);
-                regIndex++;
                 continue;
             }
 
@@ -479,24 +487,62 @@ public class ModbusTcpDecoder : IProtocolDecoder
             RawValueHex: rawValueHex));
     }
 
-    private static double Unpack32BitRegister(TagDataType dataType, RegisterEndianness endianness, ReadOnlySpan<byte> fourBytes) =>
+    private static int GetRegisterWidth(TagDataType dataType) =>
         dataType switch
         {
-            TagDataType.Int32 => BinaryPrimitives.ReadInt32BigEndian(fourBytes),
-            TagDataType.Float32 => endianness == RegisterEndianness.Cdab
-                ? ReadSwappedFloat32(fourBytes)
-                : BinaryPrimitives.ReadSingleBigEndian(fourBytes),
-            _ => 0.0
+            TagDataType.Int32 or TagDataType.UInt32 or TagDataType.Float32 => 2,
+            TagDataType.Int64 or TagDataType.UInt64 or TagDataType.Float64 => 4,
+            _ => 1
         };
 
-    private static float ReadSwappedFloat32(ReadOnlySpan<byte> fourBytes)
+    private static double UnpackNumericRegister(
+        TagDataType dataType,
+        RegisterEndianness endianness,
+        ReadOnlySpan<byte> wireBytes)
     {
-        Span<byte> swapped = stackalloc byte[4];
-        swapped[0] = fourBytes[2];
-        swapped[1] = fourBytes[3];
-        swapped[2] = fourBytes[0];
-        swapped[3] = fourBytes[1];
-        return BinaryPrimitives.ReadSingleBigEndian(swapped);
+        Span<byte> bigEndianBytes = stackalloc byte[wireBytes.Length];
+        PermuteToBigEndian(wireBytes, endianness, bigEndianBytes);
+
+        return dataType switch
+        {
+            TagDataType.Int16 => BinaryPrimitives.ReadInt16BigEndian(bigEndianBytes),
+            TagDataType.UInt16 => BinaryPrimitives.ReadUInt16BigEndian(bigEndianBytes),
+            TagDataType.Int32 => BinaryPrimitives.ReadInt32BigEndian(bigEndianBytes),
+            TagDataType.UInt32 => BinaryPrimitives.ReadUInt32BigEndian(bigEndianBytes),
+            TagDataType.Int64 => BinaryPrimitives.ReadInt64BigEndian(bigEndianBytes),
+            TagDataType.UInt64 => BinaryPrimitives.ReadUInt64BigEndian(bigEndianBytes),
+            TagDataType.Float32 => BinaryPrimitives.ReadSingleBigEndian(bigEndianBytes),
+            TagDataType.Float64 => BinaryPrimitives.ReadDoubleBigEndian(bigEndianBytes),
+            _ => 0.0
+        };
+    }
+
+    private static void PermuteToBigEndian(
+        ReadOnlySpan<byte> wireBytes,
+        RegisterEndianness endianness,
+        Span<byte> destination)
+    {
+        bool swapWords = endianness is RegisterEndianness.Cdab or RegisterEndianness.Dcba;
+        bool swapBytesWithinWord = endianness is RegisterEndianness.Badc or RegisterEndianness.Dcba;
+        int wordCount = wireBytes.Length / 2;
+
+        for (int wordIndex = 0; wordIndex < wordCount; wordIndex++)
+        {
+            int srcWordIndex = swapWords ? (wordCount - 1 - wordIndex) : wordIndex;
+            int srcByteOffset = srcWordIndex * 2;
+            int dstByteOffset = wordIndex * 2;
+
+            if (swapBytesWithinWord)
+            {
+                destination[dstByteOffset] = wireBytes[srcByteOffset + 1];
+                destination[dstByteOffset + 1] = wireBytes[srcByteOffset];
+            }
+            else
+            {
+                destination[dstByteOffset] = wireBytes[srcByteOffset];
+                destination[dstByteOffset + 1] = wireBytes[srcByteOffset + 1];
+            }
+        }
     }
 
     private bool TryFindMappedTag(

@@ -319,15 +319,16 @@ Paths in the manifest (such as `pcap_file` and `tag_mapping_csv`) can be absolut
 ---
 
 ### 2. Tag Mapping CSV Files
-Each device pair references a CSV file defining tag mappings and linear engineering scaling ($y = mx + c$).
+Each device pair references a CSV file defining tag mappings, register endianness, and linear engineering scaling ($y = mx + c$).
 
 ```csv
-Protocol,Address,TagName,DataType,ScaleMultiplier,ScaleOffset,Units,Description
-ModbusTCP,HR:40001,Bus_Volts_PhaseA,FLOAT32_BE,0.1,0.0,kV,Phase A Bus Voltage
-ModbusTCP,COIL:00005,Breaker_52A_Status,BOOL,1.0,0.0,,52A Breaker Auxiliary Contact
-DNP3,G30V02:Idx0,Feeder_Active_Power,INT16,0.01,0.0,MW,Feeder MW Telemetry
-DNP3,G01V02:Idx4,Overcurrent_Trip,BOOL,1.0,0.0,,Relay 51 Trip Signal
-DNP3,G12V01:Idx0,Breaker_Trip_Cmd,BOOL,1.0,0.0,,CROB Trip Command Point
+Protocol,Address,TagName,DataType,Endianness,ScaleMultiplier,ScaleOffset,Units,Description
+ModbusTCP,HR:40001,Bus_Volts_PhaseA,FLOAT32,ABCD,0.1,0.0,kV,Phase A Bus Voltage
+ModbusTCP,HR:40003,Setpoint_Frequency_Hz,FLOAT32,CDAB,1.0,0.0,Hz,Frequency Setpoint Command Register
+ModbusTCP,COIL:00005,Breaker_52A_Status,BOOL,,1.0,0.0,,52A Breaker Auxiliary Contact
+DNP3,G30V02:Idx0,Feeder_Active_Power,INT16,,0.01,0.0,MW,Feeder MW Telemetry
+DNP3,G01V02:Idx4,Overcurrent_Trip,BOOL,,1.0,0.0,,Relay 51 Trip Signal
+DNP3,G12V01:Idx0,Breaker_Trip_Cmd,BOOL,,1.0,0.0,,CROB Trip Command Point
 ```
 
 #### CSV Column Definitions
@@ -342,15 +343,34 @@ DNP3,G12V01:Idx0,Breaker_Trip_Cmd,BOOL,1.0,0.0,,CROB Trip Command Point
 3. **`TagName`**: Unique, human-readable tag identifier (e.g. `Bus_Volts_PhaseA`).
 4. **`DataType`**: Wire decoding format:
    - `BOOL`: Single bit boolean
-   - `INT16`: 16-bit signed integer (Big-Endian)
-   - `UINT16`: 16-bit unsigned integer (Big-Endian)
-   - `INT32`: 32-bit signed integer (Big-Endian)
-   - `FLOAT32_BE`: IEEE 754 32-bit float (Big-Endian: `[Byte0, Byte1, Byte2, Byte3]`)
-   - `FLOAT32_SWAPPED`: IEEE 754 32-bit float with 16-bit word swap (`[Byte2, Byte3, Byte0, Byte1]`)
-5. **`ScaleMultiplier`**: Multiplier $m$ in $y = mx + c$ (use `1.0` for unscaled).
-6. **`ScaleOffset`**: Offset $c$ in $y = mx + c$ (use `0.0` for no offset).
-7. **`Units`**: Engineering units string (e.g., `kV`, `MW`, `Hz`, `degC`). Optional.
-8. **`Description`**: Engineering point description. Optional.
+   - `INT16`: 16-bit signed integer (1 register)
+   - `UINT16`: 16-bit unsigned integer (1 register)
+   - `INT32`: 32-bit signed integer (2 registers)
+   - `UINT32`: 32-bit unsigned integer (2 registers)
+   - `INT64`: 64-bit signed integer (4 registers)
+   - `UINT64`: 64-bit unsigned integer (4 registers)
+   - `FLOAT32`: IEEE 754 32-bit float (2 registers)
+   - `FLOAT64`: IEEE 754 64-bit float (4 registers)
+5. **`Endianness`**: Word and byte ordering for Modbus registers (optional; defaults to `ABCD` when left blank):
+   - `ABCD`: Big-Endian words, Big-Endian bytes
+   - `DCBA`: Little-Endian words, Little-Endian bytes (full byte reversal)
+   - `BADC`: Big-Endian words, Little-Endian bytes (intra-word byte swap)
+   - `CDAB`: Little-Endian words, Big-Endian bytes (16-bit word swap)
+6. **`ScaleMultiplier`**: Multiplier $m$ in $y = mx + c$ (use `1.0` for unscaled).
+7. **`ScaleOffset`**: Offset $c$ in $y = mx + c$ (use `0.0` for no offset).
+8. **`Units`**: Engineering units string (e.g., `kV`, `MW`, `Hz`, `degC`). Optional.
+9. **`Description`**: Engineering point description. Optional.
+
+#### Register Endianness Byte-Mapping Reference
+
+For Modbus TCP numeric registers, the 4-letter endianness code represents the two orthogonal ordering axes in 16-bit register protocols: **16-bit word order** and **byte order within each 16-bit word**. Given raw wire bytes `[B0, B1, ...]`, the decoder reorders them into canonical Big-Endian evaluation order prior to unpacking as follows (`raw_hex` always preserves the exact un-swapped wire order):
+
+| Endianness | Word Order | Byte Order (Within Word) | 16-bit (1 Register: `INT16`, `UINT16`) | 32-bit (2 Registers: `INT32`, `UINT32`, `FLOAT32`) | 64-bit (4 Registers: `INT64`, `UINT64`, `FLOAT64`) |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`ABCD`** *(Default)* | Big-Endian | Big-Endian | `[B0, B1]` | `[B0, B1, B2, B3]` | `[B0, B1, B2, B3, B4, B5, B6, B7]` |
+| **`CDAB`** *(Word Swap)* | Little-Endian | Big-Endian | `[B0, B1]` | `[B2, B3, B0, B1]` | `[B6, B7, B4, B5, B2, B3, B0, B1]` |
+| **`BADC`** *(Byte Swap)* | Big-Endian | Little-Endian | `[B1, B0]` | `[B1, B0, B3, B2]` | `[B1, B0, B3, B2, B5, B4, B7, B6]` |
+| **`DCBA`** *(Little-Endian)* | Little-Endian | Little-Endian | `[B1, B0]` | `[B3, B2, B1, B0]` | `[B7, B6, B5, B4, B3, B2, B1, B0]` |
 
 ---
 
