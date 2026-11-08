@@ -28,8 +28,19 @@ public enum TagDataType
     Int16,
     UInt16,
     Int32,
-    Float32Be,
-    Float32Swapped
+    UInt32,
+    Int64,
+    UInt64,
+    Float32,
+    Float64
+}
+
+public enum RegisterEndianness
+{
+    Abcd,
+    Dcba,
+    Badc,
+    Cdab
 }
 
 public enum TransactionErrorType
@@ -203,7 +214,8 @@ public record TagDefinition(
     double ScaleMultiplier,
     double ScaleOffset,
     string? EngineeringUnits,
-    string? Description
+    string? Description,
+    RegisterEndianness Endianness = RegisterEndianness.Abcd
 )
 {
     public double ComputeScaledValue(double unscaledValue) => (unscaledValue * ScaleMultiplier) + ScaleOffset;

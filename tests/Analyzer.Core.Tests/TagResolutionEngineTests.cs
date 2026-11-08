@@ -169,7 +169,7 @@ public class TagResolutionEngineTests
             DevicePairId: pairId,
             TagName: "Bus_Volts_A",
             ProtocolAddress: address,
-            DataType: TagDataType.Float32Be,
+            DataType: TagDataType.Float32,
             ScaleMultiplier: 0.1,
             ScaleOffset: 0.0,
             EngineeringUnits: "kV",

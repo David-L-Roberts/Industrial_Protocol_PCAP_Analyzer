@@ -27,6 +27,7 @@ internal static class TimescaleDbTables
         ("tag_name", NpgsqlDbType.Varchar, r => r.TagName),
         ("protocol_address", NpgsqlDbType.Varchar, r => r.ProtocolAddress.Value),
         ("data_type", NpgsqlDbType.Varchar, r => ToWire(r.DataType)),
+        ("endianness", NpgsqlDbType.Varchar, r => ToWire(r.Endianness)),
         ("scale_multiplier", NpgsqlDbType.Double, r => r.ScaleMultiplier),
         ("scale_offset", NpgsqlDbType.Double, r => r.ScaleOffset),
         ("engineering_units", NpgsqlDbType.Varchar, r => r.EngineeringUnits),

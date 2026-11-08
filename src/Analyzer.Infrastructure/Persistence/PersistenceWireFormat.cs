@@ -64,8 +64,20 @@ internal static class PersistenceWireFormat
         TagDataType.Int16 => "INT16",
         TagDataType.UInt16 => "UINT16",
         TagDataType.Int32 => "INT32",
-        TagDataType.Float32Be => "FLOAT32_BE",
-        TagDataType.Float32Swapped => "FLOAT32_SWAPPED",
+        TagDataType.UInt32 => "UINT32",
+        TagDataType.Int64 => "INT64",
+        TagDataType.UInt64 => "UINT64",
+        TagDataType.Float32 => "FLOAT32",
+        TagDataType.Float64 => "FLOAT64",
+        _ => throw Unmapped(value)
+    };
+
+    public static string ToWire(RegisterEndianness value) => value switch
+    {
+        RegisterEndianness.Abcd => "ABCD",
+        RegisterEndianness.Dcba => "DCBA",
+        RegisterEndianness.Badc => "BADC",
+        RegisterEndianness.Cdab => "CDAB",
         _ => throw Unmapped(value)
     };
 

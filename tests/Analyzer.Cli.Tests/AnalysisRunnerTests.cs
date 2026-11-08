@@ -45,8 +45,8 @@ public class AnalysisRunnerTests : IDisposable
 
         string csvPath = Path.Combine(_tempDir, "tags.csv");
         string csvContent = """
-            Protocol,Address,TagName,DataType,ScaleMultiplier,ScaleOffset,Units,Description
-            ModbusTCP,HR:40001,Bus_Volts_A,UINT16,0.1,0.0,kV,Phase A Bus Voltage
+            Protocol,Address,TagName,DataType,Endianness,ScaleMultiplier,ScaleOffset,Units,Description
+            ModbusTCP,HR:40001,Bus_Volts_A,UINT16,,0.1,0.0,kV,Phase A Bus Voltage
             """;
         await File.WriteAllTextAsync(csvPath, csvContent);
 

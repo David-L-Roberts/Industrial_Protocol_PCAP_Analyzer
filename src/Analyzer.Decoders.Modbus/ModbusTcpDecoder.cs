@@ -303,7 +303,7 @@ public class ModbusTcpDecoder : IProtocolDecoder
             }
             else if (quantity == 2 &&
                      hasTag &&
-                     tag.DataType is TagDataType.Int32 or TagDataType.Float32Be or TagDataType.Float32Swapped &&
+                     tag.DataType is TagDataType.Int32 or TagDataType.Float32 &&
                      dataPoints.Count == pointsBefore + 1)
             {
                 unscaledCommandValue = dataPoints[pointsBefore].UnscaledNumericValue;
@@ -382,13 +382,13 @@ public class ModbusTcpDecoder : IProtocolDecoder
             int wireOffset = startAddress + regIndex;
             if (TryFindMappedTag(context.Pair.Id, context.RegisterType, wireOffset, out var tag))
             {
-                bool is32Bit = tag.DataType is TagDataType.Int32 or TagDataType.Float32Be or TagDataType.Float32Swapped;
+                bool is32Bit = tag.DataType is TagDataType.Int32 or TagDataType.Float32;
                 if (is32Bit)
                 {
                     if (regIndex + 1 < availableRegisters)
                     {
                         ReadOnlySpan<byte> fourBytes = dataBytes.Slice(regIndex * 2, 4);
-                        double unscaled = Unpack32BitRegister(tag.DataType, fourBytes);
+                        double unscaled = Unpack32BitRegister(tag.DataType, tag.Endianness, fourBytes);
                         string rawHex = Convert.ToHexString(fourBytes);
                         ProjectTagPoint(context, tag.ProtocolAddress, unscaled, null, rawHex, dataPoints);
                         regIndex += 2;
@@ -479,12 +479,13 @@ public class ModbusTcpDecoder : IProtocolDecoder
             RawValueHex: rawValueHex));
     }
 
-    private static double Unpack32BitRegister(TagDataType dataType, ReadOnlySpan<byte> fourBytes) =>
+    private static double Unpack32BitRegister(TagDataType dataType, RegisterEndianness endianness, ReadOnlySpan<byte> fourBytes) =>
         dataType switch
         {
             TagDataType.Int32 => BinaryPrimitives.ReadInt32BigEndian(fourBytes),
-            TagDataType.Float32Be => BinaryPrimitives.ReadSingleBigEndian(fourBytes),
-            TagDataType.Float32Swapped => ReadSwappedFloat32(fourBytes),
+            TagDataType.Float32 => endianness == RegisterEndianness.Cdab
+                ? ReadSwappedFloat32(fourBytes)
+                : BinaryPrimitives.ReadSingleBigEndian(fourBytes),
             _ => 0.0
         };
 

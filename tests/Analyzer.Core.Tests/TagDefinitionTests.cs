@@ -12,7 +12,7 @@ public class TagDefinitionTests
             DevicePairId: Guid.NewGuid(),
             TagName: "Bus_Volts_A",
             ProtocolAddress: ProtocolAddress.Parse("HR:40001"),
-            DataType: TagDataType.Float32Be,
+            DataType: TagDataType.Float32,
             ScaleMultiplier: 0.1,
             ScaleOffset: 5.0,
             EngineeringUnits: "kV",

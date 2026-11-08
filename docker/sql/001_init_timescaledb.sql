@@ -37,7 +37,8 @@ CREATE TABLE tag_definitions (
     device_pair_id UUID NOT NULL REFERENCES device_pairs(id) ON DELETE CASCADE,
     tag_name VARCHAR(255) NOT NULL,
     protocol_address VARCHAR(100) NOT NULL,   -- e.g. 'HR:40001', 'COIL:00012', 'G30V02:Idx4'
-    data_type VARCHAR(50) NOT NULL,           -- 'BOOL', 'INT16', 'UINT16', 'INT32', 'FLOAT32_BE', 'FLOAT32_SWAPPED'
+    data_type VARCHAR(50) NOT NULL,           -- 'BOOL', 'INT16', 'UINT16', 'INT32', 'UINT32', 'INT64', 'UINT64', 'FLOAT32', 'FLOAT64'
+    endianness VARCHAR(10) NOT NULL DEFAULT 'ABCD', -- 'ABCD', 'DCBA', 'BADC', 'CDAB'
     scale_multiplier DOUBLE PRECISION NOT NULL DEFAULT 1.0,
     scale_offset DOUBLE PRECISION NOT NULL DEFAULT 0.0,
     engineering_units VARCHAR(50),

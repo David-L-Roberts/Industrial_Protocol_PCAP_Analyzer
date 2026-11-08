@@ -71,11 +71,12 @@ public class LiveTimescaleDbBatchSinkTests : IAsyncLifetime
             DevicePairId: pairId,
             TagName: "Feeder_Voltage_kV",
             ProtocolAddress: ProtocolAddress.Parse("HR:40001"),
-            DataType: TagDataType.Float32Be,
+            DataType: TagDataType.Float32,
             ScaleMultiplier: 0.1,
             ScaleOffset: 2.5,
             EngineeringUnits: "kV",
-            Description: "Feeder Phase A Voltage");
+            Description: "Feeder Phase A Voltage",
+            Endianness: RegisterEndianness.Cdab);
 
         var boolTag = new TagDefinition(
             Id: boolTagId,
@@ -93,8 +94,8 @@ public class LiveTimescaleDbBatchSinkTests : IAsyncLifetime
 
         await AssertSessionRowAsync(session, expectedWireStatus: "PROCESSING");
         await AssertDevicePairRowAsync(pair, expectedWireProtocol: "ModbusTCP");
-        await AssertTagDefinitionMetadataAsync(numericTag, expectedWireDataType: "FLOAT32_BE");
-        await AssertTagDefinitionMetadataAsync(boolTag, expectedWireDataType: "BOOL");
+        await AssertTagDefinitionMetadataAsync(numericTag, expectedWireDataType: "FLOAT32", expectedWireEndianness: "CDAB");
+        await AssertTagDefinitionMetadataAsync(boolTag, expectedWireDataType: "BOOL", expectedWireEndianness: "ABCD");
 
         // 2. Write Batch 1 across all four hypertables
         var tx1 = new ProtocolTransactionRecord(
@@ -405,12 +406,15 @@ public class LiveTimescaleDbBatchSinkTests : IAsyncLifetime
         Assert.Equal(expectedPair.ServerProtocolAddressId, reader.IsDBNull(6) ? null : reader.GetInt32(6));
     }
 
-    private async Task AssertTagDefinitionMetadataAsync(TagDefinition expectedTag, string expectedWireDataType)
+    private async Task AssertTagDefinitionMetadataAsync(
+        TagDefinition expectedTag,
+        string expectedWireDataType,
+        string expectedWireEndianness)
     {
         await using var conn = await _dataSource.OpenConnectionAsync();
         await using var cmd = new NpgsqlCommand(
             """
-            SELECT device_pair_id, tag_name, protocol_address, data_type, scale_multiplier, scale_offset, engineering_units, description
+            SELECT device_pair_id, tag_name, protocol_address, data_type, endianness, scale_multiplier, scale_offset, engineering_units, description
             FROM tag_definitions
             WHERE id = @id;
             """,
@@ -423,10 +427,11 @@ public class LiveTimescaleDbBatchSinkTests : IAsyncLifetime
         Assert.Equal(expectedTag.TagName, reader.GetString(1));
         Assert.Equal(expectedTag.ProtocolAddress.Value, reader.GetString(2));
         Assert.Equal(expectedWireDataType, reader.GetString(3));
-        Assert.Equal(expectedTag.ScaleMultiplier, reader.GetDouble(4));
-        Assert.Equal(expectedTag.ScaleOffset, reader.GetDouble(5));
-        Assert.Equal(expectedTag.EngineeringUnits, reader.IsDBNull(6) ? null : reader.GetString(6));
-        Assert.Equal(expectedTag.Description, reader.IsDBNull(7) ? null : reader.GetString(7));
+        Assert.Equal(expectedWireEndianness, reader.GetString(4));
+        Assert.Equal(expectedTag.ScaleMultiplier, reader.GetDouble(5));
+        Assert.Equal(expectedTag.ScaleOffset, reader.GetDouble(6));
+        Assert.Equal(expectedTag.EngineeringUnits, reader.IsDBNull(7) ? null : reader.GetString(7));
+        Assert.Equal(expectedTag.Description, reader.IsDBNull(8) ? null : reader.GetString(8));
     }
 
     private async Task AssertTagInitialStateAsync(

@@ -514,7 +514,7 @@ public class Dnp3DecoderTests
             new TagDefinition(g30v2Idx0Id, PairId, "Feeder_MW_16Flag", ProtocolAddress.Parse("G30V02:Idx0"), TagDataType.Int16, 0.01, 0.0, "MW", null),
             new TagDefinition(g30v3Idx1Id, PairId, "Feeder_Var_32NoFlag", ProtocolAddress.Parse("G30V03:Idx1"), TagDataType.Int32, 1.0, 10.0, "kVAR", null),
             new TagDefinition(g30v4Idx2Id, PairId, "Temp_C_16NoFlag", ProtocolAddress.Parse("G30V04:Idx2"), TagDataType.Int16, 0.5, 0.0, "C", null),
-            new TagDefinition(g30v5Idx3Id, PairId, "Bus_Freq_Float32Flag", ProtocolAddress.Parse("G30V05:Idx3"), TagDataType.Float32Be, 1.0, 0.0, "Hz", null)
+            new TagDefinition(g30v5Idx3Id, PairId, "Bus_Freq_Float32Flag", ProtocolAddress.Parse("G30V05:Idx3"), TagDataType.Float32, 1.0, 0.0, "Hz", null)
         };
 
         var redEngine = new VirtualClockRedEngine(timeoutThresholdMs: 2000);
@@ -854,8 +854,8 @@ public class Dnp3DecoderTests
             new TagDefinition(g32v2Idx0Id, PairId, "Feeder_MW", ProtocolAddress.Parse("G30V02:Idx0"), TagDataType.Int16, 0.01, 0.0, "MW", null),
             new TagDefinition(g32v3Idx1Id, PairId, "AiEvt_32_WithTime", ProtocolAddress.Parse("G32V03:Idx1"), TagDataType.Int32, 0.5, 0.0, "kW", null),
             new TagDefinition(g32v4Idx2Id, PairId, "AiEvt_16_WithTime", ProtocolAddress.Parse("G32V04:Idx2"), TagDataType.Int16, 0.1, 5.0, "C", null),
-            new TagDefinition(g32v5Idx3Id, PairId, "AiEvt_Float_NoTime", ProtocolAddress.Parse("G32V05:Idx3"), TagDataType.Float32Be, 2.0, 0.0, "A", null),
-            new TagDefinition(g32v7Idx4Id, PairId, "AiEvt_Float_WithTime", ProtocolAddress.Parse("G32V07:Idx4"), TagDataType.Float32Be, 1.0, 0.0, "Hz", null)
+            new TagDefinition(g32v5Idx3Id, PairId, "AiEvt_Float_NoTime", ProtocolAddress.Parse("G32V05:Idx3"), TagDataType.Float32, 2.0, 0.0, "A", null),
+            new TagDefinition(g32v7Idx4Id, PairId, "AiEvt_Float_WithTime", ProtocolAddress.Parse("G32V07:Idx4"), TagDataType.Float32, 1.0, 0.0, "Hz", null)
         };
 
         var redEngine = new VirtualClockRedEngine(timeoutThresholdMs: 2000);

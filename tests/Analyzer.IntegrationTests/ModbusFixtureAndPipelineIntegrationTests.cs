@@ -84,9 +84,9 @@ public class ModbusFixtureAndPipelineIntegrationTests : IAsyncLifetime
             pairWithCsv.DevicePair.Protocol);
 
         Assert.NotEmpty(tags);
-        Assert.Contains(tags, t => t.ProtocolAddress == ProtocolAddress.Parse("HR:10195") && t.DataType == TagDataType.Float32Swapped);
-        Assert.Contains(tags, t => t.ProtocolAddress == ProtocolAddress.Parse("HR:10194") && t.DataType == TagDataType.UInt16);
-        Assert.Contains(tags, t => t.ProtocolAddress == ProtocolAddress.Parse("IR:8500") && t.DataType == TagDataType.UInt16);
+        Assert.Contains(tags, t => t.ProtocolAddress == ProtocolAddress.Parse("HR:10195") && t.DataType == TagDataType.Float32 && t.Endianness == RegisterEndianness.Cdab);
+        Assert.Contains(tags, t => t.ProtocolAddress == ProtocolAddress.Parse("HR:10194") && t.DataType == TagDataType.UInt16 && t.Endianness == RegisterEndianness.Abcd);
+        Assert.Contains(tags, t => t.ProtocolAddress == ProtocolAddress.Parse("IR:8500") && t.DataType == TagDataType.UInt16 && t.Endianness == RegisterEndianness.Abcd);
     }
 
     [IntegrationFact]

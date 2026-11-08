@@ -31,15 +31,15 @@ public class CsvTagMappingLoader
             if (!headerRead)
             {
                 headerRead = true;
-                if (columns.Count == 8 && string.Equals(columns[0].Trim(), "Protocol", StringComparison.OrdinalIgnoreCase))
+                if (columns.Count == 9 && string.Equals(columns[0].Trim(), "Protocol", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
             }
 
-            if (columns.Count != 8)
+            if (columns.Count != 9)
             {
-                throw new FormatException($"CSV line {lineNumber} has {columns.Count} columns; expected 8 (Protocol,Address,TagName,DataType,ScaleMultiplier,ScaleOffset,Units,Description).");
+                throw new FormatException($"CSV line {lineNumber} has {columns.Count} columns; expected 9 (Protocol,Address,TagName,DataType,Endianness,ScaleMultiplier,ScaleOffset,Units,Description).");
             }
 
             var protocol = ProtocolTypeParser.Parse(columns[0].Trim());
@@ -65,19 +65,20 @@ public class CsvTagMappingLoader
             }
 
             var dataType = ParseDataType(columns[3].Trim(), lineNumber);
+            var endianness = ParseEndianness(columns[4].Trim(), lineNumber);
 
-            if (!double.TryParse(columns[4].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var scaleMultiplier))
+            if (!double.TryParse(columns[5].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var scaleMultiplier))
             {
-                throw new FormatException($"CSV line {lineNumber} has invalid ScaleMultiplier '{columns[4]}'.");
+                throw new FormatException($"CSV line {lineNumber} has invalid ScaleMultiplier '{columns[5]}'.");
             }
 
-            if (!double.TryParse(columns[5].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var scaleOffset))
+            if (!double.TryParse(columns[6].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var scaleOffset))
             {
-                throw new FormatException($"CSV line {lineNumber} has invalid ScaleOffset '{columns[5]}'.");
+                throw new FormatException($"CSV line {lineNumber} has invalid ScaleOffset '{columns[6]}'.");
             }
 
-            var units = string.IsNullOrWhiteSpace(columns[6]) ? null : columns[6].Trim();
-            var description = string.IsNullOrWhiteSpace(columns[7]) ? null : columns[7].Trim();
+            var units = string.IsNullOrWhiteSpace(columns[7]) ? null : columns[7].Trim();
+            var description = string.IsNullOrWhiteSpace(columns[8]) ? null : columns[8].Trim();
 
             tags.Add(new TagDefinition(
                 Id: Guid.NewGuid(),
@@ -88,7 +89,8 @@ public class CsvTagMappingLoader
                 ScaleMultiplier: scaleMultiplier,
                 ScaleOffset: scaleOffset,
                 EngineeringUnits: units,
-                Description: description));
+                Description: description,
+                Endianness: endianness));
         }
 
         return tags;
@@ -112,14 +114,27 @@ public class CsvTagMappingLoader
             "INT16" => TagDataType.Int16,
             "UINT16" => TagDataType.UInt16,
             "INT32" => TagDataType.Int32,
-            "FLOAT32_BE" => TagDataType.Float32Be,
-            "FLOAT32_SWAPPED" => TagDataType.Float32Swapped,
+            "UINT32" => TagDataType.UInt32,
+            "INT64" => TagDataType.Int64,
+            "UINT64" => TagDataType.UInt64,
+            "FLOAT32" => TagDataType.Float32,
+            "FLOAT64" => TagDataType.Float64,
             _ => throw new FormatException($"CSV line {lineNumber} has unsupported DataType '{value}'.")
+        };
+
+    private static RegisterEndianness ParseEndianness(string value, int lineNumber) =>
+        value.ToUpperInvariant() switch
+        {
+            "" or "ABCD" => RegisterEndianness.Abcd,
+            "DCBA" => RegisterEndianness.Dcba,
+            "BADC" => RegisterEndianness.Badc,
+            "CDAB" => RegisterEndianness.Cdab,
+            _ => throw new FormatException($"CSV line {lineNumber} has unsupported Endianness '{value}'.")
         };
 
     private static List<string> SplitCsvLine(string line)
     {
-        var result = new List<string>(8);
+        var result = new List<string>(9);
         var current = new StringBuilder();
         bool inQuotes = false;
 

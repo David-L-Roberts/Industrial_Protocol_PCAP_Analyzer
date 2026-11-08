@@ -41,11 +41,12 @@ public class TimescaleDbBatchSinkTests
             DevicePairId: PairId,
             TagName: "Bus_Volts_A",
             ProtocolAddress: ProtocolAddress.Parse("HR:40001"),
-            DataType: TagDataType.Float32Be,
+            DataType: TagDataType.Float32,
             ScaleMultiplier: 0.1,
             ScaleOffset: 5.0,
             EngineeringUnits: "kV",
-            Description: "Phase A Bus Voltage");
+            Description: "Phase A Bus Voltage",
+            Endianness: RegisterEndianness.Cdab);
 
         await sink.InitializeSessionAsync(session, [pair], [tag], CancellationToken.None);
 
@@ -77,11 +78,49 @@ public class TimescaleDbBatchSinkTests
         var tagCopy = copies[1];
         Assert.Equal("tag_definitions", tagCopy.TableName);
         Assert.Equal(
-            new[] { "id", "device_pair_id", "tag_name", "protocol_address", "data_type", "scale_multiplier", "scale_offset", "engineering_units", "description", "initial_unscaled_numeric_value", "initial_scaled_numeric_value", "initial_boolean_value", "initial_raw_hex" },
+            new[] { "id", "device_pair_id", "tag_name", "protocol_address", "data_type", "endianness", "scale_multiplier", "scale_offset", "engineering_units", "description", "initial_unscaled_numeric_value", "initial_scaled_numeric_value", "initial_boolean_value", "initial_raw_hex" },
             tagCopy.ColumnNames);
         Assert.Equal(
-            new object?[] { TagA, PairId, "Bus_Volts_A", "HR:40001", "FLOAT32_BE", 0.1, 5.0, "kV", "Phase A Bus Voltage", null, null, null, null },
+            new object?[] { TagA, PairId, "Bus_Volts_A", "HR:40001", "FLOAT32", "CDAB", 0.1, 5.0, "kV", "Phase A Bus Voltage", null, null, null, null },
             tagCopy.Rows.Single());
+    }
+
+    [Theory]
+    [InlineData(TagDataType.Bool, RegisterEndianness.Abcd, "BOOL", "ABCD")]
+    [InlineData(TagDataType.Int16, RegisterEndianness.Dcba, "INT16", "DCBA")]
+    [InlineData(TagDataType.UInt16, RegisterEndianness.Badc, "UINT16", "BADC")]
+    [InlineData(TagDataType.Int32, RegisterEndianness.Cdab, "INT32", "CDAB")]
+    [InlineData(TagDataType.UInt32, RegisterEndianness.Abcd, "UINT32", "ABCD")]
+    [InlineData(TagDataType.Int64, RegisterEndianness.Dcba, "INT64", "DCBA")]
+    [InlineData(TagDataType.UInt64, RegisterEndianness.Badc, "UINT64", "BADC")]
+    [InlineData(TagDataType.Float32, RegisterEndianness.Cdab, "FLOAT32", "CDAB")]
+    [InlineData(TagDataType.Float64, RegisterEndianness.Abcd, "FLOAT64", "ABCD")]
+    public async Task InitializeSessionAsync_SerializesAllTagDataTypesAndEndiannessValuesToWireFormat(
+        TagDataType dataType,
+        RegisterEndianness endianness,
+        string expectedDataTypeWire,
+        string expectedEndiannessWire)
+    {
+        var sink = new TimescaleDbBatchSink(_writer);
+        var session = new TestSession(SessionId, "Session", "capture.pcap", null);
+        var tag = new TagDefinition(
+            Id: TagA,
+            DevicePairId: PairId,
+            TagName: "Tag_1",
+            ProtocolAddress: ProtocolAddress.Parse("HR:40001"),
+            DataType: dataType,
+            ScaleMultiplier: 1.0,
+            ScaleOffset: 0.0,
+            EngineeringUnits: null,
+            Description: null,
+            Endianness: endianness);
+
+        await sink.InitializeSessionAsync(session, [], [tag], CancellationToken.None);
+
+        var tagCopy = Assert.Single(_writer.Copies);
+        var row = tagCopy.Row(0);
+        Assert.Equal(expectedDataTypeWire, row["data_type"]);
+        Assert.Equal(expectedEndiannessWire, row["endianness"]);
     }
 
     [Fact]

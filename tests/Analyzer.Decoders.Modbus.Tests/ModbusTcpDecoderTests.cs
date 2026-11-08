@@ -226,29 +226,31 @@ public class ModbusTcpDecoderTests
                 EngineeringUnits: "kWh",
                 Description: null),
 
-            // Offset 4..5 (HR:40005): FLOAT32_BE -> 12.5f (0x41480000) * 2.0 + 1.0 = 26.0
+            // Offset 4..5 (HR:40005): FLOAT32 (ABCD) -> 12.5f (0x41480000) * 2.0 + 1.0 = 26.0
             new TagDefinition(
                 Id: Guid.Parse("30000000-0000-0000-0000-000000000004"),
                 DevicePairId: PairId,
                 TagName: "Current_A",
                 ProtocolAddress: ProtocolAddress.Parse("HR:40005"),
-                DataType: TagDataType.Float32Be,
+                DataType: TagDataType.Float32,
                 ScaleMultiplier: 2.0,
                 ScaleOffset: 1.0,
                 EngineeringUnits: "A",
-                Description: null),
+                Description: null,
+                Endianness: RegisterEndianness.Abcd),
 
-            // Offset 6..7 (HR:40007): FLOAT32_SWAPPED -> 50.25f (IEEE 754 BE is 0x42490000 -> word-swapped on wire: 0x0000, 0x4249)
+            // Offset 6..7 (HR:40007): FLOAT32 (CDAB) -> 50.25f (IEEE 754 BE is 0x42490000 -> word-swapped on wire: 0x0000, 0x4249)
             new TagDefinition(
                 Id: Guid.Parse("30000000-0000-0000-0000-000000000005"),
                 DevicePairId: PairId,
                 TagName: "Freq_Hz",
                 ProtocolAddress: ProtocolAddress.Parse("HR:40007"),
-                DataType: TagDataType.Float32Swapped,
+                DataType: TagDataType.Float32,
                 ScaleMultiplier: 1.0,
                 ScaleOffset: 0.0,
                 EngineeringUnits: "Hz",
-                Description: null),
+                Description: null,
+                Endianness: RegisterEndianness.Cdab),
 
             // Input Register Offset 10 (IR:30011): INT16 -> -40 * 0.5 + 10.0 = -10.0
             new TagDefinition(
@@ -611,7 +613,7 @@ public class ModbusTcpDecoderTests
         {
             new TagDefinition(coil10Id, PairId, "Coil_10", ProtocolAddress.Parse("COIL:00010"), TagDataType.Bool, 1.0, 0.0, null, null),
             new TagDefinition(coil12Id, PairId, "Coil_12", ProtocolAddress.Parse("COIL:00012"), TagDataType.Bool, 1.0, 0.0, null, null),
-            new TagDefinition(floatTagId, PairId, "Target_MW", ProtocolAddress.Parse("HR:40011"), TagDataType.Float32Be, 2.0, 0.0, "MW", null),
+            new TagDefinition(floatTagId, PairId, "Target_MW", ProtocolAddress.Parse("HR:40011"), TagDataType.Float32, 2.0, 0.0, "MW", null),
             new TagDefinition(reg20Id, PairId, "Limit_Lo", ProtocolAddress.Parse("HR:40021"), TagDataType.UInt16, 1.0, 0.0, null, null),
             new TagDefinition(reg21Id, PairId, "Limit_Hi", ProtocolAddress.Parse("HR:40022"), TagDataType.UInt16, 1.0, 0.0, null, null)
         };
