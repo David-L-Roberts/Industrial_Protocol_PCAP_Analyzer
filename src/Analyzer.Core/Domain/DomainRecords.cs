@@ -32,7 +32,12 @@ public enum PipelinePhase
 public record PipelineProgress(
     PipelinePhase Phase,
     int DevicePairCount = 0,
-    int TagCount = 0
+    int TagCount = 0,
+    long TotalFramesProcessed = 0,
+    long MatchedFramesProcessed = 0,
+    long TotalTransactions = 0,
+    long TotalRecordsPersisted = 0,
+    DateTime? LatestFrameTimestampUtc = null
 );
 
 public enum TagDataType

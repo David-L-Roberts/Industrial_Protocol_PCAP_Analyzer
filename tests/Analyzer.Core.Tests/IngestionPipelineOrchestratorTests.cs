@@ -265,7 +265,10 @@ public class IngestionPipelineOrchestratorTests
         var progress = new SynchronousProgress<PipelineProgress>(p =>
         {
             progressSnapshots.Add(p);
-            events.Add($"Phase:{p.Phase}");
+            if (p.TotalFramesProcessed == 0)
+            {
+                events.Add($"Phase:{p.Phase}");
+            }
         });
 
         var frameSource = new SyntheticFrameSource(frames);
@@ -282,6 +285,15 @@ public class IngestionPipelineOrchestratorTests
             [
                 new PipelineProgress(PipelinePhase.InitializingSession),
                 new PipelineProgress(PipelinePhase.DissectingPackets, DevicePairCount: 2, TagCount: 3),
+                new PipelineProgress(
+                    PipelinePhase.DissectingPackets,
+                    DevicePairCount: 2,
+                    TagCount: 3,
+                    TotalFramesProcessed: 1,
+                    MatchedFramesProcessed: 1,
+                    TotalTransactions: 0,
+                    TotalRecordsPersisted: 0,
+                    LatestFrameTimestampUtc: t0),
                 new PipelineProgress(PipelinePhase.FinalizingSession)
             ],
             progressSnapshots);
@@ -297,6 +309,101 @@ public class IngestionPipelineOrchestratorTests
                 "Sink:CompleteSession:Completed"
             ],
             events);
+    }
+
+    [Fact]
+    public async Task RunAsync_DuringDissectingPackets_EmitsPerFrameProgressWithRunningCountsAndVirtualClock()
+    {
+        var sessionId = Guid.NewGuid();
+        var pairId = Guid.NewGuid();
+        var tagId = Guid.NewGuid();
+        var clientIp = IPAddress.Parse("10.0.1.10");
+        var serverIp = IPAddress.Parse("10.0.1.20");
+        var unmatchedIp = IPAddress.Parse("192.168.1.99");
+
+        var pair = new DeviceEndpointPair(pairId, sessionId, "Pair1", ProtocolType.ModbusTcp, clientIp, serverIp, null, 1);
+        var tag = new TagDefinition(tagId, pairId, "Bus_Volts_A", ProtocolAddress.Parse("HR:40001"), TagDataType.UInt16, 0.1, 0.0, "kV", null);
+
+        var t0 = new DateTime(2026, 10, 26, 14, 0, 0, DateTimeKind.Utc);
+        var t1 = t0.AddMilliseconds(100);
+        var t2 = t0.AddMilliseconds(150);
+
+        var frames = new List<DissectedFrame>
+        {
+            new(1, t0, unmatchedIp, 50000, serverIp, 502, ProtocolType.ModbusTcp, [0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03]),
+            new(2, t1, clientIp, 50001, serverIp, 502, ProtocolType.ModbusTcp, [0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03]),
+            new(3, t2, serverIp, 502, clientIp, 50001, ProtocolType.ModbusTcp, [0x00, 0x01, 0x00, 0x00, 0x00, 0x05, 0x01, 0x03, 0x02, 0x05, 0x64])
+        };
+
+        var outputsByFrame = new Dictionary<long, ProtocolDecodeOutput>
+        {
+            [2] = new([], [], [], []),
+            [3] = new(
+                Transactions:
+                [
+                    new ProtocolTransactionRecord(t2, sessionId, pairId, 3, TrafficDirection.ServerToClient, "1", 3, 50.0, false, TransactionErrorType.None, TransactionStatusCode.Success)
+                ],
+                DataPoints:
+                [
+                    new ExtractedDataPointRecord(t2, null, sessionId, tagId, 3, TrafficDirection.ServerToClient, 1380, 138.0, null, "0564", PointQualityFlags.Online, true)
+                ],
+                CommandEvents:
+                [
+                    new CapturedCommandEventRecord(t2, sessionId, pairId, 3, TrafficDirection.ClientToServer, ProtocolType.ModbusTcp, 6, CommandType.ModbusWriteSingleReg, ProtocolAddress.Parse("HR:40001"), null, 1, null, null, 100, [0x06, 0x00, 0x00, 0x00, 0x64])
+                ],
+                UnmappedRegisters:
+                [
+                    new ModbusUnmappedRecord(t2, sessionId, pairId, 3, TrafficDirection.ServerToClient, 1, ModbusRegisterType.Holding, 100, "270F")
+                ])
+        };
+
+        foreach (bool storeUnmapped in new[] { false, true })
+        {
+            var session = new TestSession(
+                Id: sessionId,
+                Name: $"ProgressCounts_{storeUnmapped}",
+                PcapFileName: "counts.pcap",
+                S3ObjectKey: null,
+                TimeoutThresholdMs: 1000,
+                StoreUnmappedRegisters: storeUnmapped);
+
+            var frameSnapshots = new List<PipelineProgress>();
+            var progress = new SynchronousProgress<PipelineProgress>(p =>
+            {
+                if (p.Phase == PipelinePhase.DissectingPackets && p.TotalFramesProcessed > 0)
+                {
+                    frameSnapshots.Add(p);
+                }
+            });
+
+            var orchestrator = new IngestionPipelineOrchestrator(
+                new SyntheticFrameSource(frames),
+                [new FrameMapDecoder(outputsByFrame)],
+                new InMemoryDataSink());
+
+            await orchestrator.RunAsync(session, [pair], [tag], "counts.pcap", progress: progress);
+
+            long expectedFrame3Records = storeUnmapped ? 3 : 2;
+            Assert.Equal(
+                [
+                    new PipelineProgress(PipelinePhase.DissectingPackets, 1, 1, 1, 0, 0, 0, t0),
+                    new PipelineProgress(PipelinePhase.DissectingPackets, 1, 1, 2, 1, 0, 0, t1),
+                    new PipelineProgress(PipelinePhase.DissectingPackets, 1, 1, 3, 2, 1, expectedFrame3Records, t2)
+                ],
+                frameSnapshots);
+        }
+    }
+
+    private sealed class FrameMapDecoder(IReadOnlyDictionary<long, ProtocolDecodeOutput> outputsByFrame) : IProtocolDecoder
+    {
+        public ProtocolType Protocol => ProtocolType.ModbusTcp;
+
+        public ProtocolDecodeOutput ProcessFrame(DissectedFrame frame, DeviceEndpointPair pair, TrafficDirection direction) =>
+            outputsByFrame.TryGetValue(frame.FrameNumber, out var output)
+                ? output
+                : new ProtocolDecodeOutput([], [], [], []);
+
+        public IReadOnlyList<ProtocolTransactionRecord> FlushExpiredTimeouts(DateTime currentVirtualTime, bool isEndOfFile) => [];
     }
 
     private sealed class SynchronousProgress<T>(Action<T> handler) : IProgress<T>

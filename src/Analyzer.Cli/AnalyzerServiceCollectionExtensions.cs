@@ -55,6 +55,7 @@ public static class AnalyzerServiceCollectionExtensions
             int batchSize = options?.BatchSize ?? IngestionPipelineOrchestrator.DefaultBatchSize;
             return new IngestionPipelineOrchestrator(frameSource, decoders, dataSink, batchSize);
         });
+        services.AddSingleton(TimeProvider.System);
         services.AddTransient<IAnalysisInfrastructureFactory, DefaultAnalysisInfrastructureFactory>();
         services.AddTransient<IAnalysisRunner, AnalysisRunner>();
 

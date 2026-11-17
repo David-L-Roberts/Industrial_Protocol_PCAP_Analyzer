@@ -108,58 +108,64 @@ public class IngestionPipelineOrchestrator
                 totalFrames++;
                 lastVirtualTime = frame.TimestampUtc;
 
-                if (!TryMatchDevicePair(frame, devicePairs, out var matchedPair, out var direction))
+                if (TryMatchDevicePair(frame, devicePairs, out var matchedPair, out var direction))
                 {
-                    continue;
-                }
+                    matchedFrames++;
 
-                matchedFrames++;
-
-                if (!_decodersByProtocol.TryGetValue(matchedPair.Protocol, out var decoder))
-                {
-                    continue;
-                }
-
-                foreach (var registeredDecoder in _decodersByProtocol.Values)
-                {
-                    var expiredTimeouts = registeredDecoder.FlushExpiredTimeouts(frame.TimestampUtc, isEndOfFile: false);
-                    if (expiredTimeouts.Count > 0)
+                    if (_decodersByProtocol.TryGetValue(matchedPair.Protocol, out var decoder))
                     {
-                        transactions.AddRange(expiredTimeouts);
-                        TallyTransactions(expiredTimeouts);
+                        foreach (var registeredDecoder in _decodersByProtocol.Values)
+                        {
+                            var expiredTimeouts = registeredDecoder.FlushExpiredTimeouts(frame.TimestampUtc, isEndOfFile: false);
+                            if (expiredTimeouts.Count > 0)
+                            {
+                                transactions.AddRange(expiredTimeouts);
+                                TallyTransactions(expiredTimeouts);
+                            }
+                        }
+
+                        var output = decoder.ProcessFrame(frame, matchedPair, direction);
+                        if (output.Transactions.Count > 0)
+                        {
+                            transactions.AddRange(output.Transactions);
+                            TallyTransactions(output.Transactions);
+                        }
+
+                        if (output.DataPoints.Count > 0)
+                        {
+                            dataPoints.AddRange(output.DataPoints);
+                            dataPointsPersisted += output.DataPoints.Count;
+                        }
+
+                        if (output.CommandEvents.Count > 0)
+                        {
+                            commandEvents.AddRange(output.CommandEvents);
+                            commandEventsPersisted += output.CommandEvents.Count;
+                        }
+
+                        if (session.StoreUnmappedRegisters && output.UnmappedRegisters.Count > 0)
+                        {
+                            unmappedRegisters.AddRange(output.UnmappedRegisters);
+                            unmappedRegistersPersisted += output.UnmappedRegisters.Count;
+                        }
+
+                        int totalBuffered = transactions.Count + dataPoints.Count + commandEvents.Count + unmappedRegisters.Count;
+                        if (totalBuffered >= _batchSize)
+                        {
+                            await FlushBatchAsync(transactions, dataPoints, commandEvents, unmappedRegisters, ct);
+                        }
                     }
                 }
 
-                var output = decoder.ProcessFrame(frame, matchedPair, direction);
-                if (output.Transactions.Count > 0)
-                {
-                    transactions.AddRange(output.Transactions);
-                    TallyTransactions(output.Transactions);
-                }
-
-                if (output.DataPoints.Count > 0)
-                {
-                    dataPoints.AddRange(output.DataPoints);
-                    dataPointsPersisted += output.DataPoints.Count;
-                }
-
-                if (output.CommandEvents.Count > 0)
-                {
-                    commandEvents.AddRange(output.CommandEvents);
-                    commandEventsPersisted += output.CommandEvents.Count;
-                }
-
-                if (session.StoreUnmappedRegisters && output.UnmappedRegisters.Count > 0)
-                {
-                    unmappedRegisters.AddRange(output.UnmappedRegisters);
-                    unmappedRegistersPersisted += output.UnmappedRegisters.Count;
-                }
-
-                int totalBuffered = transactions.Count + dataPoints.Count + commandEvents.Count + unmappedRegisters.Count;
-                if (totalBuffered >= _batchSize)
-                {
-                    await FlushBatchAsync(transactions, dataPoints, commandEvents, unmappedRegisters, ct);
-                }
+                progress?.Report(new PipelineProgress(
+                    Phase: PipelinePhase.DissectingPackets,
+                    DevicePairCount: devicePairs.Count,
+                    TagCount: tags.Count,
+                    TotalFramesProcessed: totalFrames,
+                    MatchedFramesProcessed: matchedFrames,
+                    TotalTransactions: totalTransactions,
+                    TotalRecordsPersisted: dataPointsPersisted + commandEventsPersisted + unmappedRegistersPersisted,
+                    LatestFrameTimestampUtc: lastVirtualTime));
             }
 
             foreach (var decoder in _decodersByProtocol.Values)

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using Analyzer.Core.Domain;
 using Analyzer.Core.Interfaces;
 using Analyzer.Core.Pipeline;
@@ -17,11 +18,13 @@ public class AnalysisRunner : IAnalysisRunner
     private readonly ManifestParser _manifestParser;
     private readonly CsvTagMappingLoader _csvLoader;
     private readonly IAnalysisInfrastructureFactory _infraFactory;
+    private readonly TimeProvider _timeProvider;
 
     public AnalysisRunner(
         ManifestParser manifestParser,
         CsvTagMappingLoader csvLoader,
-        IAnalysisInfrastructureFactory infraFactory)
+        IAnalysisInfrastructureFactory infraFactory,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(manifestParser);
         ArgumentNullException.ThrowIfNull(csvLoader);
@@ -30,6 +33,7 @@ public class AnalysisRunner : IAnalysisRunner
         _manifestParser = manifestParser;
         _csvLoader = csvLoader;
         _infraFactory = infraFactory;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<PipelineExecutionSummary> RunAnalysisAsync(
@@ -123,7 +127,7 @@ public class AnalysisRunner : IAnalysisRunner
         try
         {
             IProgress<PipelineProgress>? progressReporter = progressOutput is not null
-                ? new CliPipelineProgressReporter(progressOutput)
+                ? new CliPipelineProgressReporter(progressOutput, _timeProvider)
                 : null;
 
             var summary = await orchestrator.RunAsync(
@@ -169,20 +173,80 @@ public class AnalysisRunner : IAnalysisRunner
         }
     }
 
-    private sealed class CliPipelineProgressReporter(TextWriter output) : IProgress<PipelineProgress>
+    private sealed class CliPipelineProgressReporter(TextWriter output, TimeProvider timeProvider)
+        : IProgress<PipelineProgress>
     {
+        private static readonly TimeSpan ProgressInterval = TimeSpan.FromSeconds(5);
+
+        private DateTimeOffset _dissectingStartTime = timeProvider.GetUtcNow();
+        private DateTimeOffset _lastStatusReportTime = timeProvider.GetUtcNow();
+
         public void Report(PipelineProgress value)
         {
             switch (value.Phase)
             {
                 case PipelinePhase.DissectingPackets:
-                    output.WriteLine(
-                        $"Initialized session with {value.DevicePairCount} device pair(s) and {value.TagCount} tag(s). Dissecting packets...");
+                    HandleDissectingPackets(value);
                     break;
                 case PipelinePhase.FinalizingSession:
                     output.WriteLine("Packet stream complete. Finalizing initial tag states in database...");
                     break;
             }
+        }
+
+        private void HandleDissectingPackets(PipelineProgress value)
+        {
+            if (value.TotalFramesProcessed == 0)
+            {
+                _dissectingStartTime = timeProvider.GetUtcNow();
+                _lastStatusReportTime = _dissectingStartTime;
+                output.WriteLine(
+                    $"Initialized session with {value.DevicePairCount} device pair(s) and {value.TagCount} tag(s). Dissecting packets...");
+                return;
+            }
+
+            if (!value.LatestFrameTimestampUtc.HasValue)
+            {
+                return;
+            }
+
+            var now = timeProvider.GetUtcNow();
+            if (now - _lastStatusReportTime < ProgressInterval)
+            {
+                return;
+            }
+
+            _lastStatusReportTime = now;
+
+            var elapsed = now - _dissectingStartTime;
+            string elapsedText = FormatElapsed(elapsed);
+            string totalFrames = value.TotalFramesProcessed.ToString("N0", CultureInfo.InvariantCulture);
+            string matchedFrames = value.MatchedFramesProcessed.ToString("N0", CultureInfo.InvariantCulture);
+            string totalTx = value.TotalTransactions.ToString("N0", CultureInfo.InvariantCulture);
+            string totalRecords = value.TotalRecordsPersisted.ToString("N0", CultureInfo.InvariantCulture);
+            string captureTime = value.LatestFrameTimestampUtc.Value.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+
+            output.WriteLine(
+                $"  [{elapsedText}] Frames: {totalFrames} ({matchedFrames} matched) | Tx: {totalTx} | Records: {totalRecords} | Capture time: {captureTime} UTC");
+        }
+
+        private static string FormatElapsed(TimeSpan elapsed)
+        {
+            if (elapsed < TimeSpan.Zero)
+            {
+                elapsed = TimeSpan.Zero;
+            }
+
+            if (elapsed >= TimeSpan.FromHours(1))
+            {
+                return string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"{(int)elapsed.TotalHours:D2}:{elapsed.Minutes:D2}:{elapsed.Seconds:D2}");
+            }
+
+            return string.Create(
+                CultureInfo.InvariantCulture,
+                $"{elapsed.Minutes:D2}:{elapsed.Seconds:D2}");
         }
     }
 }

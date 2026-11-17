@@ -11,8 +11,8 @@ where `<total_records>` is the combined count of persisted Extracted Data Points
 
 **Status:** ready-for-agent
 
-- [ ] During the `DissectingPackets` phase, `PipelineProgress` snapshots include running counts for total frames processed, matched frames processed, RED transactions, combined persisted records, and the latest `DissectedFrame` Virtual Clock UTC timestamp.
-- [ ] The CLI throttles `DissectingPackets` progress output using an injectable `TimeProvider` (defaulting to system wall-clock time) so that a status line is written at most once every 5 seconds of elapsed wall-clock time as frames are processed.
-- [ ] Status lines format elapsed time as `[mm:ss]` (or `[hh:mm:ss]` if a run exceeds one hour), format integer counters with thousands separators (`N0` invariant formatting), and format the packet Virtual Clock timestamp as `yyyy-MM-dd HH:mm:ss UTC`.
-- [ ] No new CLI flags are introduced; the 5-second progress interval is active by default whenever progress output is provided.
-- [ ] Deterministic unit tests using a controllable `TimeProvider` verify that status lines are emitted at 5-second intervals, suppressed between intervals, and accurately reflect frame, transaction, record, and Virtual Clock metrics.
+- [x] During the `DissectingPackets` phase, `PipelineProgress` snapshots include running counts for total frames processed, matched frames processed, RED transactions, combined persisted records, and the latest `DissectedFrame` Virtual Clock UTC timestamp.
+- [x] The CLI throttles `DissectingPackets` progress output using an injectable `TimeProvider` (defaulting to system wall-clock time) so that a status line is written at most once every 5 seconds of elapsed wall-clock time as frames are processed.
+- [x] Status lines format elapsed time as `[mm:ss]` (or `[hh:mm:ss]` if a run exceeds one hour), format integer counters with thousands separators (`N0` invariant formatting), and format the packet Virtual Clock timestamp as `yyyy-MM-dd HH:mm:ss UTC`.
+- [x] No new CLI flags are introduced; the 5-second progress interval is active by default whenever progress output is provided.
+- [x] Deterministic unit tests using a controllable `TimeProvider` verify that status lines are emitted at 5-second intervals, suppressed between intervals, and accurately reflect frame, transaction, record, and Virtual Clock metrics.

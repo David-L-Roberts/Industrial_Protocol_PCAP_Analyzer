@@ -328,6 +328,191 @@ public class AnalysisRunnerTests : IDisposable
         Assert.True(completedIdx > finalizingIdx, "Expected Session Completed banner after FinalizingSession milestone.");
     }
 
+    [Fact]
+    public async Task RunAnalysisAsync_ThrottlesDissectingPacketsProgressToFiveSecondIntervalsAndFormatsMetrics()
+    {
+        string pcapPath = Path.Combine(_tempDir, "throttled.pcap");
+        await File.WriteAllBytesAsync(pcapPath, [0x01, 0x02]);
+
+        string csvPath = Path.Combine(_tempDir, "throttled_tags.csv");
+        string csvContent = """
+            Protocol,Address,TagName,DataType,Endianness,ScaleMultiplier,ScaleOffset,Units,Description
+            ModbusTCP,HR:40001,Bus_Volts_A,UINT16,,0.1,0.0,kV,Phase A Voltage
+            """;
+        await File.WriteAllTextAsync(csvPath, csvContent);
+
+        string manifestPath = Path.Combine(_tempDir, "manifest_throttled.json");
+        var manifestObj = new
+        {
+            session_name = "SAT_Throttled_Run",
+            pcap_file = "throttled.pcap",
+            timeout_threshold_ms = 1000,
+            store_unmapped_registers = true,
+            device_pairs = new[]
+            {
+                new
+                {
+                    name = "RTAC_to_Relay",
+                    protocol = "ModbusTCP",
+                    client_ip = "10.0.1.10",
+                    server_ip = "10.0.1.20",
+                    client_protocol_address_id = (int?)null,
+                    server_protocol_address_id = (int?)1,
+                    tag_mapping_csv = "throttled_tags.csv"
+                }
+            }
+        };
+        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifestObj));
+
+        var clientIp = IPAddress.Parse("10.0.1.10");
+        var serverIp = IPAddress.Parse("10.0.1.20");
+        var unmatchedIp = IPAddress.Parse("192.168.1.99");
+        var captureBase = new DateTime(2026, 10, 26, 12, 0, 0, DateTimeKind.Utc);
+
+        var frames = new List<DissectedFrame>
+        {
+            // Frame 1: unmatched at +2s wall-clock (suppressed)
+            new(1, captureBase.AddSeconds(1), unmatchedIp, 50000, serverIp, 502, ProtocolType.ModbusTcp, [0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03]),
+            // Frame 2: matched request TxId=1 at +5s wall-clock (emits [00:05])
+            new(2, captureBase.AddSeconds(5), clientIp, 50000, serverIp, 502, ProtocolType.ModbusTcp, [0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03, 0x00, 0x00, 0x00, 0x01]),
+            // Frame 3: matched response TxId=1 HR:40001 at +8s wall-clock (suppressed: 3s < 5s)
+            new(3, captureBase.AddSeconds(6), serverIp, 502, clientIp, 50000, ProtocolType.ModbusTcp, [0x00, 0x01, 0x00, 0x00, 0x00, 0x05, 0x01, 0x03, 0x02, 0x05, 0x64]),
+            // Frame 4: matched request TxId=2 (unmapped HR:40101) at +10s wall-clock (emits [00:10])
+            new(4, captureBase.AddSeconds(10), clientIp, 50000, serverIp, 502, ProtocolType.ModbusTcp, [0x00, 0x02, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03, 0x00, 0x64, 0x00, 0x01]),
+            // Frame 5: matched response TxId=2 (unmapped) 50ms after Frame 4 at +1h05m00s wall-clock (emits [01:05:00])
+            new(5, captureBase.AddSeconds(10).AddMilliseconds(50), serverIp, 502, clientIp, 50000, ProtocolType.ModbusTcp, [0x00, 0x02, 0x00, 0x00, 0x00, 0x05, 0x01, 0x03, 0x02, 0x27, 0x0F])
+        };
+
+        var wallIncrementsByFrame = new Dictionary<long, TimeSpan>
+        {
+            [1] = TimeSpan.FromSeconds(2),
+            [2] = TimeSpan.FromSeconds(3),
+            [3] = TimeSpan.FromSeconds(3),
+            [4] = TimeSpan.FromSeconds(2),
+            [5] = TimeSpan.FromHours(1) + TimeSpan.FromMinutes(4) + TimeSpan.FromSeconds(50)
+        };
+
+        var fakeTime = new FakeTimeProvider(new DateTimeOffset(2026, 10, 26, 12, 0, 0, TimeSpan.Zero));
+        var fakeSink = new FakeDataSink();
+        var fakeSource = new FakeFrameSource(frames, frame => fakeTime.Advance(wallIncrementsByFrame[frame.FrameNumber]));
+        var infraFactory = new FakeInfraFactory(fakeSink, fakeSource, null);
+
+        var services = new ServiceCollection();
+        services.AddAnalyzerCoreServices();
+        services.AddSingleton<IAnalysisInfrastructureFactory>(infraFactory);
+        services.AddSingleton<TimeProvider>(fakeTime);
+        var sp = services.BuildServiceProvider();
+
+        var runner = sp.GetRequiredService<IAnalysisRunner>();
+        var options = new AnalysisOptions(
+            ManifestPath: manifestPath,
+            DbConnectionString: "Host=localhost;Database=test");
+
+        using var progressWriter = new StringWriter();
+        await runner.RunAnalysisAsync(options, progressWriter);
+
+        var lines = progressWriter
+            .ToString()
+            .Split(["\r\n", "\n"], StringSplitOptions.RemoveEmptyEntries);
+
+        var statusLines = lines.Where(l => l.StartsWith("  [", StringComparison.Ordinal)).ToArray();
+        Assert.Equal(
+            [
+                "  [00:05] Frames: 2 (1 matched) | Tx: 0 | Records: 0 | Capture time: 2026-10-26 12:00:05 UTC",
+                "  [00:10] Frames: 4 (3 matched) | Tx: 1 | Records: 1 | Capture time: 2026-10-26 12:00:10 UTC",
+                "  [01:05:00] Frames: 5 (4 matched) | Tx: 2 | Records: 2 | Capture time: 2026-10-26 12:00:10 UTC"
+            ],
+            statusLines);
+
+        int dissectingIdx = Array.IndexOf(lines, "Initialized session with 1 device pair(s) and 1 tag(s). Dissecting packets...");
+        int firstStatusIdx = Array.IndexOf(lines, statusLines[0]);
+        int lastStatusIdx = Array.IndexOf(lines, statusLines[^1]);
+        int finalizingIdx = Array.IndexOf(lines, "Packet stream complete. Finalizing initial tag states in database...");
+
+        Assert.True(dissectingIdx >= 0);
+        Assert.True(firstStatusIdx > dissectingIdx);
+        Assert.True(finalizingIdx > lastStatusIdx);
+    }
+
+    [Fact]
+    public async Task RunAnalysisAsync_FormatsLargeProgressCountersWithThousandsSeparators()
+    {
+        string pcapPath = Path.Combine(_tempDir, "large_counts.pcap");
+        await File.WriteAllBytesAsync(pcapPath, [0x01, 0x02]);
+
+        string manifestPath = Path.Combine(_tempDir, "manifest_large.json");
+        var manifestObj = new
+        {
+            session_name = "SAT_Large_Counts",
+            pcap_file = "large_counts.pcap",
+            timeout_threshold_ms = 1000,
+            store_unmapped_registers = false,
+            device_pairs = new[]
+            {
+                new
+                {
+                    name = "ModbusPair",
+                    protocol = "ModbusTCP",
+                    client_ip = "10.0.1.10",
+                    server_ip = "10.0.1.20",
+                    client_protocol_address_id = (int?)null,
+                    server_protocol_address_id = (int?)1,
+                    tag_mapping_csv = (string?)null
+                }
+            }
+        };
+        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifestObj));
+
+        var unmatchedIp = IPAddress.Parse("192.168.1.99");
+        var serverIp = IPAddress.Parse("10.0.1.20");
+        var captureBase = new DateTime(2026, 10, 26, 15, 0, 0, DateTimeKind.Utc);
+        var frames = Enumerable.Range(1, 1000)
+            .Select(i => new DissectedFrame(
+                FrameNumber: i,
+                TimestampUtc: captureBase.AddSeconds(i),
+                SourceIp: unmatchedIp,
+                SourcePort: 50000,
+                DestIp: serverIp,
+                DestPort: 502,
+                ProtocolName: ProtocolType.ModbusTcp,
+                RawApplicationPayload: [0x00, 0x01]))
+            .ToList();
+
+        var fakeTime = new FakeTimeProvider(new DateTimeOffset(2026, 10, 26, 15, 0, 0, TimeSpan.Zero));
+        var fakeSource = new FakeFrameSource(frames, frame =>
+        {
+            if (frame.FrameNumber == 1000)
+            {
+                fakeTime.Advance(TimeSpan.FromSeconds(5));
+            }
+        });
+
+        var services = new ServiceCollection();
+        services.AddAnalyzerCoreServices();
+        services.AddSingleton<IAnalysisInfrastructureFactory>(new FakeInfraFactory(new FakeDataSink(), fakeSource, null));
+        services.AddSingleton<TimeProvider>(fakeTime);
+        var sp = services.BuildServiceProvider();
+
+        var runner = sp.GetRequiredService<IAnalysisRunner>();
+        var options = new AnalysisOptions(manifestPath, "Host=localhost;Database=test");
+
+        using var progressWriter = new StringWriter();
+        await runner.RunAnalysisAsync(options, progressWriter);
+
+        Assert.Contains(
+            "  [00:05] Frames: 1,000 (0 matched) | Tx: 0 | Records: 0 | Capture time: 2026-10-26 15:16:40 UTC",
+            progressWriter.ToString());
+    }
+
+    private sealed class FakeTimeProvider(DateTimeOffset initialUtcNow) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = initialUtcNow;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan delta) => _utcNow = _utcNow.Add(delta);
+    }
+
     private sealed class FakeInfraFactory(
         IDataSink sink,
         IFrameSource source,
@@ -338,7 +523,9 @@ public class AnalysisRunnerTests : IDisposable
         public IPcapArchiveStorage? CreateArchiver(AnalysisOptions options) => archiver;
     }
 
-    private sealed class FakeFrameSource(IReadOnlyList<DissectedFrame> frames) : IFrameSource
+    private sealed class FakeFrameSource(
+        IReadOnlyList<DissectedFrame> frames,
+        Action<DissectedFrame>? onBeforeYield = null) : IFrameSource
     {
         public async IAsyncEnumerable<DissectedFrame> ReadFramesAsync(
             string pcapFilePath,
@@ -347,6 +534,7 @@ public class AnalysisRunnerTests : IDisposable
             foreach (var f in frames)
             {
                 await Task.Yield();
+                onBeforeYield?.Invoke(f);
                 yield return f;
             }
         }
