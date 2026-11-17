@@ -122,12 +122,17 @@ public class AnalysisRunner : IAnalysisRunner
 
         try
         {
+            IProgress<PipelineProgress>? progressReporter = progressOutput is not null
+                ? new CliPipelineProgressReporter(progressOutput)
+                : null;
+
             var summary = await orchestrator.RunAsync(
                 session,
                 devicePairs,
                 allTags,
                 inputPath,
-                ct);
+                ct,
+                progressReporter);
 
             stopwatch.Stop();
 
@@ -161,6 +166,23 @@ public class AnalysisRunner : IAnalysisRunner
             }
 
             throw;
+        }
+    }
+
+    private sealed class CliPipelineProgressReporter(TextWriter output) : IProgress<PipelineProgress>
+    {
+        public void Report(PipelineProgress value)
+        {
+            switch (value.Phase)
+            {
+                case PipelinePhase.DissectingPackets:
+                    output.WriteLine(
+                        $"Initialized session with {value.DevicePairCount} device pair(s) and {value.TagCount} tag(s). Dissecting packets...");
+                    break;
+                case PipelinePhase.FinalizingSession:
+                    output.WriteLine("Packet stream complete. Finalizing initial tag states in database...");
+                    break;
+            }
         }
     }
 }

@@ -215,6 +215,95 @@ public class IngestionPipelineOrchestratorTests
         Assert.Equal(SessionStatus.Failed, dataSink.CompletedStatus);
     }
 
+    [Fact]
+    public async Task RunAsync_ReportsLifecyclePhaseTransitionsInOrderAroundDataSinkOperations()
+    {
+        var sessionId = Guid.NewGuid();
+        var pair1Id = Guid.NewGuid();
+        var pair2Id = Guid.NewGuid();
+        var clientIp = IPAddress.Parse("10.0.1.10");
+        var serverIp = IPAddress.Parse("10.0.1.20");
+
+        var session = new TestSession(
+            Id: sessionId,
+            Name: "ProgressSession",
+            PcapFileName: "progress.pcap",
+            S3ObjectKey: null,
+            TimeoutThresholdMs: 1000,
+            StoreUnmappedRegisters: false);
+
+        var pairs = new List<DeviceEndpointPair>
+        {
+            new(pair1Id, sessionId, "Pair1", ProtocolType.ModbusTcp, clientIp, serverIp, null, 1),
+            new(pair2Id, sessionId, "Pair2", ProtocolType.ModbusTcp, clientIp, serverIp, null, 2)
+        };
+
+        var tags = new List<TagDefinition>
+        {
+            new(Guid.NewGuid(), pair1Id, "Tag1", ProtocolAddress.Parse("HR:40001"), TagDataType.UInt16, 1.0, 0.0, "V", null),
+            new(Guid.NewGuid(), pair1Id, "Tag2", ProtocolAddress.Parse("HR:40002"), TagDataType.UInt16, 1.0, 0.0, "A", null),
+            new(Guid.NewGuid(), pair2Id, "Tag3", ProtocolAddress.Parse("HR:40001"), TagDataType.UInt16, 1.0, 0.0, "W", null)
+        };
+
+        var t0 = new DateTime(2026, 10, 26, 14, 0, 0, DateTimeKind.Utc);
+        var frames = new List<DissectedFrame>
+        {
+            new(
+                FrameNumber: 1,
+                TimestampUtc: t0,
+                SourceIp: clientIp,
+                SourcePort: 50001,
+                DestIp: serverIp,
+                DestPort: 502,
+                ProtocolName: ProtocolType.ModbusTcp,
+                RawApplicationPayload: [0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03],
+                DissectedFields: new Dictionary<string, string> { ["tx_id"] = "TX-1", ["fc"] = "3" })
+        };
+
+        var events = new List<string>();
+        var progressSnapshots = new List<PipelineProgress>();
+        var progress = new SynchronousProgress<PipelineProgress>(p =>
+        {
+            progressSnapshots.Add(p);
+            events.Add($"Phase:{p.Phase}");
+        });
+
+        var frameSource = new SyntheticFrameSource(frames);
+        var redEngine = new VirtualClockRedEngine(session.TimeoutThresholdMs);
+        var tagEngine = new TagResolutionEngine(tags);
+        var decoder = new SyntheticModbusDecoder(redEngine, tagEngine);
+        var dataSink = new InMemoryDataSink(events);
+
+        var orchestrator = new IngestionPipelineOrchestrator(frameSource, [decoder], dataSink);
+
+        await orchestrator.RunAsync(session, pairs, tags, "progress.pcap", progress: progress);
+
+        Assert.Equal(
+            [
+                new PipelineProgress(PipelinePhase.InitializingSession),
+                new PipelineProgress(PipelinePhase.DissectingPackets, DevicePairCount: 2, TagCount: 3),
+                new PipelineProgress(PipelinePhase.FinalizingSession)
+            ],
+            progressSnapshots);
+
+        Assert.Equal(
+            [
+                "Phase:InitializingSession",
+                "Sink:InitializeSession",
+                "Phase:DissectingPackets",
+                "Sink:WriteBatch",
+                "Phase:FinalizingSession",
+                "Sink:UpdateTagInitialStates",
+                "Sink:CompleteSession:Completed"
+            ],
+            events);
+    }
+
+    private sealed class SynchronousProgress<T>(Action<T> handler) : IProgress<T>
+    {
+        public void Report(T value) => handler(value);
+    }
+
     private sealed class ThrowingFrameSource : IFrameSource
     {
         public async IAsyncEnumerable<DissectedFrame> ReadFramesAsync(
@@ -325,7 +414,7 @@ public class IngestionPipelineOrchestratorTests
             redEngine.FlushExpiredTimeouts(currentVirtualTime, isEndOfFile);
     }
 
-    private sealed class InMemoryDataSink : IDataSink
+    private sealed class InMemoryDataSink(List<string>? events = null) : IDataSink
     {
         public TestSession? InitializedSession { get; private set; }
         public List<ProtocolTransactionRecord> Transactions { get; } = [];
@@ -342,6 +431,7 @@ public class IngestionPipelineOrchestratorTests
             CancellationToken ct)
         {
             InitializedSession = session;
+            events?.Add("Sink:InitializeSession");
             return Task.CompletedTask;
         }
 
@@ -351,18 +441,21 @@ public class IngestionPipelineOrchestratorTests
             DataPoints.AddRange(batch.DataPoints);
             CommandEvents.AddRange(batch.CommandEvents);
             UnmappedRegisters.AddRange(batch.UnmappedRegisters);
+            events?.Add("Sink:WriteBatch");
             return Task.CompletedTask;
         }
 
         public Task UpdateTagInitialStatesAsync(Guid sessionId, CancellationToken ct)
         {
             InitialStatesUpdated = true;
+            events?.Add("Sink:UpdateTagInitialStates");
             return Task.CompletedTask;
         }
 
         public Task CompleteSessionAsync(Guid sessionId, SessionStatus status, CancellationToken ct)
         {
             CompletedStatus = status;
+            events?.Add($"Sink:CompleteSession:{status}");
             return Task.CompletedTask;
         }
     }

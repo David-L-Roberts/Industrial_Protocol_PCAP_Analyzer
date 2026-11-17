@@ -43,7 +43,8 @@ public class IngestionPipelineOrchestrator
         IReadOnlyList<DeviceEndpointPair> devicePairs,
         IReadOnlyList<TagDefinition> tags,
         string pcapFilePath,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        IProgress<PipelineProgress>? progress = null)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(devicePairs);
@@ -52,7 +53,12 @@ public class IngestionPipelineOrchestrator
 
         try
         {
+            progress?.Report(new PipelineProgress(PipelinePhase.InitializingSession));
             await _dataSink.InitializeSessionAsync(session, devicePairs, tags, ct);
+            progress?.Report(new PipelineProgress(
+                PipelinePhase.DissectingPackets,
+                DevicePairCount: devicePairs.Count,
+                TagCount: tags.Count));
 
             var transactions = new List<ProtocolTransactionRecord>();
             var dataPoints = new List<ExtractedDataPointRecord>();
@@ -171,6 +177,7 @@ public class IngestionPipelineOrchestrator
                 await FlushBatchAsync(transactions, dataPoints, commandEvents, unmappedRegisters, ct);
             }
 
+            progress?.Report(new PipelineProgress(PipelinePhase.FinalizingSession));
             await _dataSink.UpdateTagInitialStatesAsync(session.Id, ct);
             await _dataSink.CompleteSessionAsync(session.Id, SessionStatus.Completed, ct);
 

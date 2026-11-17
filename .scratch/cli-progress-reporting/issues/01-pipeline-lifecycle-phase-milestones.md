@@ -8,8 +8,8 @@ Domain progress reporting uses strong domain types (`PipelinePhase` enum for `In
 
 **Status:** ready-for-agent
 
-- [ ] The ingestion pipeline emits strongly-typed `PipelineProgress` notifications as a `TestSession` transitions through `InitializingSession`, `DissectingPackets` (once session, `DeviceEndpointPair`, and `TagDefinition` records are initialized), and `FinalizingSession` (once all `DissectedFrame` records and EOF timeouts are flushed, prior to updating $T_0$ Initial States).
-- [ ] When `DissectingPackets` begins, the CLI writes `Initialized session with <N> device pair(s) and <M> tag(s). Dissecting packets...` to the progress output stream.
-- [ ] When `FinalizingSession` begins, the CLI writes `Packet stream complete. Finalizing initial tag states in database...` to the progress output stream before the final session completion banner.
-- [ ] Core domain logic remains free of `TextWriter` and wall-clock time dependencies.
-- [ ] Unit tests verify phase transition ordering and CLI milestone output without invoking external binaries or a live database.
+- [x] The ingestion pipeline emits strongly-typed `PipelineProgress` notifications as a `TestSession` transitions through `InitializingSession`, `DissectingPackets` (once session, `DeviceEndpointPair`, and `TagDefinition` records are initialized), and `FinalizingSession` (once all `DissectedFrame` records and EOF timeouts are flushed, prior to updating $T_0$ Initial States).
+- [x] When `DissectingPackets` begins, the CLI writes `Initialized session with <N> device pair(s) and <M> tag(s). Dissecting packets...` to the progress output stream.
+- [x] When `FinalizingSession` begins, the CLI writes `Packet stream complete. Finalizing initial tag states in database...` to the progress output stream before the final session completion banner.
+- [x] Core domain logic remains free of `TextWriter` and wall-clock time dependencies.
+- [x] Unit tests verify phase transition ordering and CLI milestone output without invoking external binaries or a live database.

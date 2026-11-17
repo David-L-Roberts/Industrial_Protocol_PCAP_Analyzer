@@ -245,6 +245,89 @@ public class AnalysisRunnerTests : IDisposable
         await Assert.ThrowsAsync<FileNotFoundException>(() => runner.RunAnalysisAsync(options));
     }
 
+    [Fact]
+    public async Task RunAnalysisAsync_WritesLifecyclePhaseMilestonesInOrderBeforeCompletionBanner()
+    {
+        string pcapPath = Path.Combine(_tempDir, "milestones.pcap");
+        await File.WriteAllBytesAsync(pcapPath, [0x01, 0x02]);
+
+        string csvPath1 = Path.Combine(_tempDir, "pair1_tags.csv");
+        string csvContent1 = """
+            Protocol,Address,TagName,DataType,Endianness,ScaleMultiplier,ScaleOffset,Units,Description
+            ModbusTCP,HR:40001,Bus_Volts_A,UINT16,,0.1,0.0,kV,Phase A Voltage
+            ModbusTCP,HR:40002,Bus_Volts_B,UINT16,,0.1,0.0,kV,Phase B Voltage
+            """;
+        await File.WriteAllTextAsync(csvPath1, csvContent1);
+
+        string csvPath2 = Path.Combine(_tempDir, "pair2_tags.csv");
+        string csvContent2 = """
+            Protocol,Address,TagName,DataType,Endianness,ScaleMultiplier,ScaleOffset,Units,Description
+            ModbusTCP,HR:40001,Feeder_Current,UINT16,,1.0,0.0,A,Feeder Current
+            """;
+        await File.WriteAllTextAsync(csvPath2, csvContent2);
+
+        string manifestPath = Path.Combine(_tempDir, "manifest_milestones.json");
+        var manifestObj = new
+        {
+            session_name = "SAT_Milestones_Run",
+            pcap_file = "milestones.pcap",
+            timeout_threshold_ms = 1000,
+            store_unmapped_registers = false,
+            device_pairs = new[]
+            {
+                new
+                {
+                    name = "Pair_1",
+                    protocol = "ModbusTCP",
+                    client_ip = "10.0.1.10",
+                    server_ip = "10.0.1.20",
+                    client_protocol_address_id = (int?)null,
+                    server_protocol_address_id = (int?)1,
+                    tag_mapping_csv = "pair1_tags.csv"
+                },
+                new
+                {
+                    name = "Pair_2",
+                    protocol = "ModbusTCP",
+                    client_ip = "10.0.1.10",
+                    server_ip = "10.0.1.21",
+                    client_protocol_address_id = (int?)null,
+                    server_protocol_address_id = (int?)1,
+                    tag_mapping_csv = "pair2_tags.csv"
+                }
+            }
+        };
+        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifestObj));
+
+        var fakeSink = new FakeDataSink();
+        var fakeSource = new FakeFrameSource([]);
+        var infraFactory = new FakeInfraFactory(fakeSink, fakeSource, null);
+
+        var services = new ServiceCollection();
+        services.AddAnalyzerCoreServices();
+        services.AddSingleton<IAnalysisInfrastructureFactory>(infraFactory);
+        var sp = services.BuildServiceProvider();
+
+        var runner = sp.GetRequiredService<IAnalysisRunner>();
+        var options = new AnalysisOptions(
+            ManifestPath: manifestPath,
+            DbConnectionString: "Host=localhost;Database=test");
+
+        using var progressWriter = new StringWriter();
+        await runner.RunAnalysisAsync(options, progressWriter);
+
+        string output = progressWriter.ToString();
+        int startingIdx = output.IndexOf("Starting analysis session 'SAT_Milestones_Run'", StringComparison.Ordinal);
+        int dissectingIdx = output.IndexOf("Initialized session with 2 device pair(s) and 3 tag(s). Dissecting packets...", StringComparison.Ordinal);
+        int finalizingIdx = output.IndexOf("Packet stream complete. Finalizing initial tag states in database...", StringComparison.Ordinal);
+        int completedIdx = output.IndexOf("Session Completed: SAT_Milestones_Run", StringComparison.Ordinal);
+
+        Assert.True(startingIdx >= 0, "Expected starting session line.");
+        Assert.True(dissectingIdx > startingIdx, "Expected DissectingPackets milestone after starting session line.");
+        Assert.True(finalizingIdx > dissectingIdx, "Expected FinalizingSession milestone after DissectingPackets milestone.");
+        Assert.True(completedIdx > finalizingIdx, "Expected Session Completed banner after FinalizingSession milestone.");
+    }
+
     private sealed class FakeInfraFactory(
         IDataSink sink,
         IFrameSource source,

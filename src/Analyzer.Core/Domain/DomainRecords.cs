@@ -22,6 +22,19 @@ public enum SessionStatus
     Failed
 }
 
+public enum PipelinePhase
+{
+    InitializingSession,
+    DissectingPackets,
+    FinalizingSession
+}
+
+public record PipelineProgress(
+    PipelinePhase Phase,
+    int DevicePairCount = 0,
+    int TagCount = 0
+);
+
 public enum TagDataType
 {
     Bool,
