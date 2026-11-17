@@ -6,7 +6,7 @@ Domain progress reporting uses strong domain types (`PipelinePhase` enum for `In
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] The ingestion pipeline emits strongly-typed `PipelineProgress` notifications as a `TestSession` transitions through `InitializingSession`, `DissectingPackets` (once session, `DeviceEndpointPair`, and `TagDefinition` records are initialized), and `FinalizingSession` (once all `DissectedFrame` records and EOF timeouts are flushed, prior to updating $T_0$ Initial States).
 - [x] When `DissectingPackets` begins, the CLI writes `Initialized session with <N> device pair(s) and <M> tag(s). Dissecting packets...` to the progress output stream.

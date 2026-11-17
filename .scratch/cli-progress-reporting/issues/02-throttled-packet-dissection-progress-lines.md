@@ -9,7 +9,7 @@ where `<total_records>` is the combined count of persisted Extracted Data Points
 
 **Blocked by:** 01: Pipeline lifecycle phase milestones in CLI analysis output
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] During the `DissectingPackets` phase, `PipelineProgress` snapshots include running counts for total frames processed, matched frames processed, RED transactions, combined persisted records, and the latest `DissectedFrame` Virtual Clock UTC timestamp.
 - [x] The CLI throttles `DissectingPackets` progress output using an injectable `TimeProvider` (defaulting to system wall-clock time) so that a status line is written at most once every 5 seconds of elapsed wall-clock time as frames are processed.
