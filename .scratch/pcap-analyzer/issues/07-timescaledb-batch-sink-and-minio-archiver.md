@@ -4,7 +4,7 @@
 
 **Blocked by:** 01: Core Pipeline, Virtual Clock RED Engine & Tag Resolution Engine
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] Implements `IDataSink.InitializeSessionAsync` to insert session metadata, device pairs, and tag definitions inside a transaction.
 - [x] Implements `IDataSink.WriteBatchAsync` using `NpgsqlBinaryImporter` (`COPY ... FROM STDIN (FORMAT BINARY)`) in bounded batches (default 5,000 rows) for `red_transactions`, `tag_values`, `captured_command_events`, and `modbus_raw_unmapped`.

@@ -4,7 +4,7 @@
 
 **Blocked by:** 01: Core Pipeline, Virtual Clock RED Engine & Tag Resolution Engine
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] Parses DNP3 Data Link (start bytes `0x0564`, length, control, source/destination addresses, CRC stripping), Transport header, and Application request/response headers.
 - [x] Correlates `ClientToServer` requests and `ServerToClient` responses by DNP3 Application Sequence number to emit `ProtocolTransactionRecord` RED Metrics, flagging error `IIN` bits (e.g., `DNP3_IIN_PARAM_ERR`, `DNP3_IIN_FUNC_NOT_SUPPORTED`) as `EXCEPTION` errors.

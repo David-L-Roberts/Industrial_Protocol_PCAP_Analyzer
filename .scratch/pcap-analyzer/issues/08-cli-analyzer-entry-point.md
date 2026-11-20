@@ -8,7 +8,7 @@
 - 06: DNP3 Event Object Handlers (Dual Timestamps) & CROB Control Command Capture
 - 07: TimescaleDB High-Speed Batch Sink & MinIO PCAP Archiver
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] Implements the `analyze` CLI command accepting `--manifest <path>`, `--db <conn_string>`, and optional `--s3-endpoint` / `--ndjson-input` arguments.
 - [x] Registers all core engines, protocol decoders, DNP3 Phase 1 object group handlers, and infrastructure adapters via Dependency Injection.

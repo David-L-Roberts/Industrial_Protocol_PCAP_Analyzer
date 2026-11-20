@@ -4,7 +4,7 @@
 
 **Blocked by:** 05: DNP3 Framing, RED Transactions, IIN Decoding & Static/Counter Object Handlers
 
-**Status:** ready-for-agent
+**Status:** resolved
 
 - [x] Decodes **Group 2** (Var 1 without time, Var 2 with absolute 48-bit DNP3 time, Var 3 with relative time), populating both `PacketTimestamp` and `EventTimestamp` (when present) on `ExtractedDataPointRecord`.
 - [x] Decodes **Group 22** (Var 1, 2, 5, 6 16/32-bit counter change events with/without time) into `ExtractedDataPointRecord`.
