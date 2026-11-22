@@ -239,47 +239,20 @@ public class VirtualClockRedEngine
             if (candidate.SpanContext is { } spanCtx)
             {
                 DateTime startTimeUtc = candidate.TimestampUtc;
-                DateTime endTimeUtc = startTimeUtc.AddMilliseconds(durationMs);
-                var originKind = isMidStreamTimeout ? SpanOriginKind.Timeout : SpanOriginKind.TimeoutAtEof;
-                string statusMessage = isMidStreamTimeout ? "TIMEOUT" : "TIMEOUT_AT_EOF";
+                DateTime endTimeUtc = isMidStreamTimeout
+                    ? startTimeUtc.AddMilliseconds(_timeoutThresholdMs)
+                    : (currentVirtualTime >= startTimeUtc ? currentVirtualTime : startTimeUtc);
 
-                var events = new List<SpanEventRecord>(spanCtx.Events.Count + 1);
-                events.AddRange(spanCtx.Events);
-                events.Add(new SpanEventRecord(
-                    TimestampUtc: endTimeUtc,
-                    Kind: SpanEventKind.TimeoutExpired,
-                    Name: "timeout_expired",
-                    Fields: new Dictionary<string, object?>
-                    {
-                        ["timeout_ms"] = durationMs,
-                        ["reason"] = statusMessage
-                    }));
-
-                traceSpans.Add(new TraceSpanRecord(
-                    StartTimeUtc: startTimeUtc,
-                    EndTimeUtc: endTimeUtc,
-                    DurationMs: durationMs,
-                    SessionId: candidate.SessionId,
-                    DevicePairId: candidate.DevicePairId,
-                    TraceId: spanCtx.TraceId,
-                    SpanId: spanCtx.SpanId,
-                    ParentSpanId: spanCtx.ParentSpanId,
-                    ServiceName: spanCtx.ServiceName,
-                    OperationName: spanCtx.OperationName,
-                    SpanKind: spanCtx.SpanKind,
-                    OriginKind: originKind,
-                    StatusCode: SpanStatusCode.Error,
-                    StatusMessage: statusMessage,
-                    Protocol: spanCtx.Protocol,
-                    ClientEndpoint: spanCtx.ClientEndpoint,
-                    ServerEndpoint: spanCtx.ServerEndpoint,
-                    Direction: spanCtx.Direction,
-                    RequestFrameNumber: candidate.FrameNumber,
-                    ResponseFrameNumber: null,
-                    TransactionId: candidate.TransactionId,
-                    FunctionCode: candidate.FunctionCode,
-                    Attributes: spanCtx.Attributes,
-                    Events: events));
+                traceSpans.Add(spanCtx.CreateTimeoutSpan(
+                    sessionId: candidate.SessionId,
+                    devicePairId: candidate.DevicePairId,
+                    requestFrameNumber: candidate.FrameNumber,
+                    startTimeUtc: startTimeUtc,
+                    endTimeUtc: endTimeUtc,
+                    durationMs: durationMs,
+                    transactionId: candidate.TransactionId,
+                    functionCode: candidate.FunctionCode,
+                    isMidStreamTimeout: isMidStreamTimeout));
             }
         }
 

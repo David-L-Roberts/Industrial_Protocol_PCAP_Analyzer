@@ -536,6 +536,21 @@ public class LiveTimescaleDbBatchSinkTests : IAsyncLifetime
         Assert.Equal("Feeder1_Relay", reader.GetString(8));
         Assert.Contains("\"modbus.unit_id\"", reader.GetString(9), StringComparison.Ordinal);
         Assert.Contains("response_received", reader.GetString(10), StringComparison.Ordinal);
+        await reader.CloseAsync();
+
+        string[] correlatedTables = ["red_transactions", "tag_values", "captured_command_events"];
+        foreach (string table in correlatedTables)
+        {
+            await using var corrCmd = new NpgsqlCommand(
+                $"SELECT trace_id, span_id FROM {table} WHERE session_id = @sessionId AND trace_id IS NOT NULL;",
+                conn);
+            corrCmd.Parameters.AddWithValue("sessionId", sessionId);
+
+            await using var corrReader = await corrCmd.ExecuteReaderAsync();
+            Assert.True(await corrReader.ReadAsync(), $"Expected correlated trace_id/span_id row in {table}.");
+            Assert.Equal(expectedTraceId.Value, corrReader.GetString(0));
+            Assert.Equal(expectedSpanId.Value, corrReader.GetString(1));
+        }
     }
 
     private async Task AssertTagDefinitionMetadataAsync(

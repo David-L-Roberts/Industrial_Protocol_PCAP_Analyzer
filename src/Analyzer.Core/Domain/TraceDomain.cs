@@ -9,21 +9,14 @@ internal static class W3cHexIdValidator
         int expectedLength,
         [NotNullWhen(true)] out string? normalized)
     {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            normalized = null;
-            return false;
-        }
-
-        string trimmed = value.Trim();
-        if (trimmed.Length != expectedLength)
+        if (string.IsNullOrEmpty(value) || value.Length != expectedLength)
         {
             normalized = null;
             return false;
         }
 
         bool hasNonZero = false;
-        foreach (char c in trimmed)
+        foreach (char c in value)
         {
             if (!char.IsAsciiHexDigit(c))
             {
@@ -43,7 +36,7 @@ internal static class W3cHexIdValidator
             return false;
         }
 
-        normalized = trimmed.ToLowerInvariant();
+        normalized = value.ToLowerInvariant();
         return true;
     }
 }
@@ -253,7 +246,61 @@ public record PendingSpanContext(
     TrafficDirection Direction = TrafficDirection.ClientToServer,
     DateTime RequestTimestampUtc = default,
     long? RequestFrameNumber = null
-);
+)
+{
+    public TraceSpanRecord CreateTimeoutSpan(
+        Guid sessionId,
+        Guid devicePairId,
+        long requestFrameNumber,
+        DateTime startTimeUtc,
+        DateTime endTimeUtc,
+        double durationMs,
+        string transactionId,
+        short functionCode,
+        bool isMidStreamTimeout)
+    {
+        var originKind = isMidStreamTimeout ? SpanOriginKind.Timeout : SpanOriginKind.TimeoutAtEof;
+        string statusMessage = isMidStreamTimeout ? "TIMEOUT" : "TIMEOUT_AT_EOF";
+
+        var events = new List<SpanEventRecord>(Events.Count + 1);
+        events.AddRange(Events);
+        events.Add(new SpanEventRecord(
+            TimestampUtc: endTimeUtc,
+            Kind: SpanEventKind.TimeoutExpired,
+            Name: string.Empty,
+            Fields: new Dictionary<string, object?>
+            {
+                ["timeout_ms"] = durationMs,
+                ["reason"] = originKind
+            }));
+
+        return new TraceSpanRecord(
+            StartTimeUtc: startTimeUtc,
+            EndTimeUtc: endTimeUtc,
+            DurationMs: durationMs,
+            SessionId: sessionId,
+            DevicePairId: devicePairId,
+            TraceId: TraceId,
+            SpanId: SpanId,
+            ParentSpanId: ParentSpanId,
+            ServiceName: ServiceName,
+            OperationName: OperationName,
+            SpanKind: SpanKind,
+            OriginKind: originKind,
+            StatusCode: SpanStatusCode.Error,
+            StatusMessage: statusMessage,
+            Protocol: Protocol,
+            ClientEndpoint: ClientEndpoint,
+            ServerEndpoint: ServerEndpoint,
+            Direction: Direction,
+            RequestFrameNumber: requestFrameNumber,
+            ResponseFrameNumber: null,
+            TransactionId: transactionId,
+            FunctionCode: functionCode,
+            Attributes: Attributes,
+            Events: events);
+    }
+}
 
 public record TimeoutFlushOutput(
     IReadOnlyList<ProtocolTransactionRecord> Transactions,

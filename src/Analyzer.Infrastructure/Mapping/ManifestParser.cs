@@ -54,17 +54,8 @@ public class ManifestParser
             throw new FormatException("Manifest 'pcap_file' is required.");
         }
 
-        int timeoutThresholdMs = dto.TimeoutThresholdMs ?? 2000;
-        if (timeoutThresholdMs <= 0)
-        {
-            throw new FormatException("Manifest 'timeout_threshold_ms' must be greater than zero.");
-        }
-
-        int sboWindowMs = dto.SboWindowMs ?? 10000;
-        if (sboWindowMs <= 0)
-        {
-            throw new FormatException("Manifest 'sbo_window_ms' must be greater than zero.");
-        }
+        int timeoutThresholdMs = ParsePositiveInt(dto.TimeoutThresholdMs, defaultValue: 2000, "timeout_threshold_ms");
+        int sboWindowMs = ParsePositiveInt(dto.SboWindowMs, defaultValue: 10000, "sbo_window_ms");
 
         var resolvedSessionId = sessionId ?? Guid.NewGuid();
         var session = new TestSession(
@@ -116,6 +107,17 @@ public class ManifestParser
         }
 
         return new ParsedSessionManifest(session, pairs);
+    }
+
+    private static int ParsePositiveInt(int? value, int defaultValue, string fieldName)
+    {
+        int resolved = value ?? defaultValue;
+        if (resolved <= 0)
+        {
+            throw new FormatException($"Manifest '{fieldName}' must be greater than zero.");
+        }
+
+        return resolved;
     }
 
     private static string? NormalizeOptionalName(string? value) =>

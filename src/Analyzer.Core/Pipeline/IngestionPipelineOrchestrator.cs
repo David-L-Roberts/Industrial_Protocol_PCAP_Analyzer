@@ -60,11 +60,7 @@ public class IngestionPipelineOrchestrator
                 DevicePairCount: devicePairs.Count,
                 TagCount: tags.Count));
 
-            var transactions = new List<ProtocolTransactionRecord>();
-            var dataPoints = new List<ExtractedDataPointRecord>();
-            var commandEvents = new List<CapturedCommandEventRecord>();
-            var unmappedRegisters = new List<ModbusUnmappedRecord>();
-            var traceSpans = new List<TraceSpanRecord>();
+            var buffer = new BatchBuffer();
 
             DateTime lastVirtualTime = DateTime.UnixEpoch;
             long totalFrames = 0;
@@ -105,19 +101,24 @@ public class IngestionPipelineOrchestrator
                 }
             }
 
+            void AccumulateTraceSpans(IReadOnlyList<TraceSpanRecord> spans)
+            {
+                if (session.StoreTraceSpans && spans.Count > 0)
+                {
+                    buffer.TraceSpans.AddRange(spans);
+                    traceSpansPersisted += spans.Count;
+                }
+            }
+
             void AccumulateTimeouts(TimeoutFlushOutput flushed)
             {
                 if (flushed.Transactions.Count > 0)
                 {
-                    transactions.AddRange(flushed.Transactions);
+                    buffer.Transactions.AddRange(flushed.Transactions);
                     TallyTransactions(flushed.Transactions);
                 }
 
-                if (session.StoreTraceSpans && flushed.TraceSpans.Count > 0)
-                {
-                    traceSpans.AddRange(flushed.TraceSpans);
-                    traceSpansPersisted += flushed.TraceSpans.Count;
-                }
+                AccumulateTraceSpans(flushed.TraceSpans);
             }
 
             await foreach (var frame in _frameSource.ReadFramesAsync(pcapFilePath, ct))
@@ -139,44 +140,33 @@ public class IngestionPipelineOrchestrator
                         var output = decoder.ProcessFrame(frame, matchedPair, direction);
                         if (output.Transactions.Count > 0)
                         {
-                            transactions.AddRange(output.Transactions);
+                            buffer.Transactions.AddRange(output.Transactions);
                             TallyTransactions(output.Transactions);
                         }
 
                         if (output.DataPoints.Count > 0)
                         {
-                            dataPoints.AddRange(output.DataPoints);
+                            buffer.DataPoints.AddRange(output.DataPoints);
                             dataPointsPersisted += output.DataPoints.Count;
                         }
 
                         if (output.CommandEvents.Count > 0)
                         {
-                            commandEvents.AddRange(output.CommandEvents);
+                            buffer.CommandEvents.AddRange(output.CommandEvents);
                             commandEventsPersisted += output.CommandEvents.Count;
                         }
 
                         if (session.StoreUnmappedRegisters && output.UnmappedRegisters.Count > 0)
                         {
-                            unmappedRegisters.AddRange(output.UnmappedRegisters);
+                            buffer.UnmappedRegisters.AddRange(output.UnmappedRegisters);
                             unmappedRegistersPersisted += output.UnmappedRegisters.Count;
                         }
 
-                        if (session.StoreTraceSpans && output.TraceSpans.Count > 0)
-                        {
-                            traceSpans.AddRange(output.TraceSpans);
-                            traceSpansPersisted += output.TraceSpans.Count;
-                        }
+                        AccumulateTraceSpans(output.TraceSpans);
 
-                        int totalBuffered =
-                            transactions.Count +
-                            dataPoints.Count +
-                            commandEvents.Count +
-                            unmappedRegisters.Count +
-                            traceSpans.Count;
-
-                        if (totalBuffered >= _batchSize)
+                        if (buffer.TotalCount >= _batchSize)
                         {
-                            await FlushBatchAsync(transactions, dataPoints, commandEvents, unmappedRegisters, traceSpans, ct);
+                            await FlushBatchAsync(buffer, ct);
                         }
                     }
                 }
@@ -197,13 +187,9 @@ public class IngestionPipelineOrchestrator
                 AccumulateTimeouts(decoder.FlushExpiredTimeouts(lastVirtualTime, isEndOfFile: true));
             }
 
-            if (transactions.Count > 0 ||
-                dataPoints.Count > 0 ||
-                commandEvents.Count > 0 ||
-                unmappedRegisters.Count > 0 ||
-                traceSpans.Count > 0)
+            if (buffer.TotalCount > 0)
             {
-                await FlushBatchAsync(transactions, dataPoints, commandEvents, unmappedRegisters, traceSpans, ct);
+                await FlushBatchAsync(buffer, ct);
             }
 
             progress?.Report(new PipelineProgress(PipelinePhase.FinalizingSession));
@@ -240,28 +226,42 @@ public class IngestionPipelineOrchestrator
         }
     }
 
-    private async Task FlushBatchAsync(
-        List<ProtocolTransactionRecord> transactions,
-        List<ExtractedDataPointRecord> dataPoints,
-        List<CapturedCommandEventRecord> commandEvents,
-        List<ModbusUnmappedRecord> unmappedRegisters,
-        List<TraceSpanRecord> traceSpans,
-        CancellationToken ct)
+    private async Task FlushBatchAsync(BatchBuffer buffer, CancellationToken ct)
     {
-        var batch = new ProtocolDecodeOutput(
-            Transactions: transactions.ToArray(),
-            DataPoints: dataPoints.ToArray(),
-            CommandEvents: commandEvents.ToArray(),
-            UnmappedRegisters: unmappedRegisters.ToArray(),
-            TraceSpans: traceSpans.ToArray());
+        await _dataSink.WriteBatchAsync(buffer.DrainToOutput(), ct);
+    }
 
-        await _dataSink.WriteBatchAsync(batch, ct);
+    private sealed class BatchBuffer
+    {
+        public List<ProtocolTransactionRecord> Transactions { get; } = [];
+        public List<ExtractedDataPointRecord> DataPoints { get; } = [];
+        public List<CapturedCommandEventRecord> CommandEvents { get; } = [];
+        public List<ModbusUnmappedRecord> UnmappedRegisters { get; } = [];
+        public List<TraceSpanRecord> TraceSpans { get; } = [];
 
-        transactions.Clear();
-        dataPoints.Clear();
-        commandEvents.Clear();
-        unmappedRegisters.Clear();
-        traceSpans.Clear();
+        public int TotalCount =>
+            Transactions.Count +
+            DataPoints.Count +
+            CommandEvents.Count +
+            UnmappedRegisters.Count +
+            TraceSpans.Count;
+
+        public ProtocolDecodeOutput DrainToOutput()
+        {
+            var batch = new ProtocolDecodeOutput(
+                Transactions: Transactions.ToArray(),
+                DataPoints: DataPoints.ToArray(),
+                CommandEvents: CommandEvents.ToArray(),
+                UnmappedRegisters: UnmappedRegisters.ToArray(),
+                TraceSpans: TraceSpans.ToArray());
+
+            Transactions.Clear();
+            DataPoints.Clear();
+            CommandEvents.Clear();
+            UnmappedRegisters.Clear();
+            TraceSpans.Clear();
+            return batch;
+        }
     }
 
     private static bool TryMatchDevicePair(

@@ -343,6 +343,58 @@ internal static class PersistenceWireFormat
             case ProtocolAddress pa:
                 writer.WriteStringValue(pa.Value);
                 break;
+            case TrafficDirection td:
+                writer.WriteStringValue(ToWire(td));
+                break;
+            case ProtocolType pt:
+                writer.WriteStringValue(ToWire(pt));
+                break;
+            case TransactionErrorType tet:
+                writer.WriteStringValue(ToWire(tet));
+                break;
+            case TransactionStatusCode tsc:
+                writer.WriteStringValue(ToWire(tsc));
+                break;
+            case SessionStatus ss:
+                writer.WriteStringValue(ToWire(ss));
+                break;
+            case TagDataType tdt:
+                writer.WriteStringValue(ToWire(tdt));
+                break;
+            case RegisterEndianness re:
+                writer.WriteStringValue(ToWire(re));
+                break;
+            case CommandType ct:
+                writer.WriteStringValue(ToWire(ct));
+                break;
+            case Dnp3ControlAction dca:
+                writer.WriteStringValue(ToWire(dca)!);
+                break;
+            case ModbusRegisterType mrt:
+                writer.WriteStringValue(ToWire(mrt));
+                break;
+            case PointQualityFlags pqf:
+                if (ToWire(pqf) is { } flagsWire)
+                {
+                    writer.WriteStringValue(flagsWire);
+                }
+                else
+                {
+                    writer.WriteNullValue();
+                }
+                break;
+            case SpanKind sk:
+                writer.WriteStringValue(ToWire(sk));
+                break;
+            case SpanStatusCode ssc:
+                writer.WriteStringValue(ToWire(ssc));
+                break;
+            case SpanOriginKind sok:
+                writer.WriteStringValue(ToWire(sok));
+                break;
+            case SpanEventKind sek:
+                writer.WriteStringValue(ToWire(sek));
+                break;
             case Enum e:
                 writer.WriteStringValue(e.ToString());
                 break;

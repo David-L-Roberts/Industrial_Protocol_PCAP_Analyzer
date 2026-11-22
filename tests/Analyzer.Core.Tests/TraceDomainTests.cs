@@ -9,11 +9,11 @@ public class TraceDomainTests
     [Fact]
     public void TraceId_ValidHex_NormalizesToLowercaseAndPreservesValueEquality()
     {
-        const string upperWithWhitespace = "  0123456789ABCDEF0123456789ABCDEF  ";
+        const string upper = "0123456789ABCDEF0123456789ABCDEF";
         const string expectedLower = "0123456789abcdef0123456789abcdef";
 
-        Assert.True(TraceId.TryParse(upperWithWhitespace, out var parsedFromTry));
-        var parsed = TraceId.Parse(upperWithWhitespace);
+        Assert.True(TraceId.TryParse(upper, out var parsedFromTry));
+        var parsed = TraceId.Parse(upper);
         var fromLower = new TraceId(expectedLower);
         var different = TraceId.Parse("fedcba9876543210fedcba9876543210");
 
@@ -32,6 +32,8 @@ public class TraceDomainTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
+    [InlineData(" 0123456789abcdef0123456789abcdef")]
+    [InlineData("0123456789abcdef0123456789abcdef ")]
     [InlineData("0123456789abcdef")]
     [InlineData("0123456789abcdef0123456789abcde")]
     [InlineData("0123456789abcdef0123456789abcdef0")]
@@ -47,11 +49,11 @@ public class TraceDomainTests
     [Fact]
     public void SpanId_ValidHex_NormalizesToLowercaseAndPreservesValueEquality()
     {
-        const string upperWithWhitespace = "  0123456789ABCDEF  ";
+        const string upper = "0123456789ABCDEF";
         const string expectedLower = "0123456789abcdef";
 
-        Assert.True(SpanId.TryParse(upperWithWhitespace, out var parsedFromTry));
-        var parsed = SpanId.Parse(upperWithWhitespace);
+        Assert.True(SpanId.TryParse(upper, out var parsedFromTry));
+        var parsed = SpanId.Parse(upper);
         var fromLower = new SpanId(expectedLower);
         var different = SpanId.Parse("fedcba9876543210");
 
@@ -70,6 +72,8 @@ public class TraceDomainTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
+    [InlineData(" 0123456789abcdef")]
+    [InlineData("0123456789abcdef ")]
     [InlineData("01234567")]
     [InlineData("0123456789abcde")]
     [InlineData("0123456789abcdef0")]

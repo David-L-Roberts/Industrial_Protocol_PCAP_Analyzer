@@ -463,6 +463,8 @@ public class TimescaleDbBatchSinkTests
                 ["modbus.quantity"] = 2L,
                 ["scale.ratio"] = 0.25,
                 ["protocol.unpaired"] = false,
+                ["protocol.name"] = ProtocolType.ModbusTcp,
+                ["quality_none"] = PointQualityFlags.None,
                 ["target"] = ProtocolAddress.Parse("HR:40001"),
                 ["optional_null"] = null
             },
@@ -476,7 +478,8 @@ public class TimescaleDbBatchSinkTests
                     {
                         ["tag_name"] = "Breaker_52A",
                         ["scaled_value"] = false,
-                        ["quality_flags"] = "ONLINE",
+                        ["quality_flags"] = PointQualityFlags.Online,
+                        ["reason"] = SpanOriginKind.Timeout,
                         ["event"] = "should_not_duplicate"
                     })
             ]);
@@ -566,6 +569,8 @@ public class TimescaleDbBatchSinkTests
         Assert.Equal(2L, attrDoc.RootElement.GetProperty("modbus.quantity").GetInt64());
         Assert.Equal(0.25, attrDoc.RootElement.GetProperty("scale.ratio").GetDouble());
         Assert.False(attrDoc.RootElement.GetProperty("protocol.unpaired").GetBoolean());
+        Assert.Equal("ModbusTCP", attrDoc.RootElement.GetProperty("protocol.name").GetString());
+        Assert.Equal(JsonValueKind.Null, attrDoc.RootElement.GetProperty("quality_none").ValueKind);
         Assert.Equal("HR:40001", attrDoc.RootElement.GetProperty("target").GetString());
         Assert.Equal(JsonValueKind.Null, attrDoc.RootElement.GetProperty("optional_null").ValueKind);
 
@@ -574,7 +579,7 @@ public class TimescaleDbBatchSinkTests
         double expectedEpochMs = (endUtc - DateTime.UnixEpoch).TotalMilliseconds;
         Assert.Equal(expectedEpochMs, eventElem.GetProperty("timestamp").GetDouble(), precision: 3);
         var fields = eventElem.GetProperty("fields").EnumerateArray().ToArray();
-        Assert.Equal(4, fields.Length);
+        Assert.Equal(5, fields.Length);
         Assert.Equal("event", fields[0].GetProperty("key").GetString());
         Assert.Equal("tag_value_changed", fields[0].GetProperty("value").GetString());
         Assert.Equal("tag_name", fields[1].GetProperty("key").GetString());
@@ -583,6 +588,8 @@ public class TimescaleDbBatchSinkTests
         Assert.False(fields[2].GetProperty("value").GetBoolean());
         Assert.Equal("quality_flags", fields[3].GetProperty("key").GetString());
         Assert.Equal("ONLINE", fields[3].GetProperty("value").GetString());
+        Assert.Equal("reason", fields[4].GetProperty("key").GetString());
+        Assert.Equal("TIMEOUT", fields[4].GetProperty("value").GetString());
 
         var row1 = copy.Row(1);
         Assert.Null(row1["parent_span_id"]);

@@ -333,9 +333,12 @@ public class VirtualClockRedEngineTests
         Assert.Equal(2, midSpan.Events.Count);
         Assert.Equal(SpanEventKind.RequestSent, midSpan.Events[0].Kind);
         Assert.Equal(SpanEventKind.TimeoutExpired, midSpan.Events[1].Kind);
+        Assert.Equal(string.Empty, midSpan.Events[1].Name);
+        Assert.Equal(SpanOriginKind.Timeout, midSpan.Events[1].Fields["reason"]);
         Assert.Equal(t0.AddMilliseconds(1500), midSpan.Events[1].TimestampUtc);
 
-        var eof = engine.FlushExpiredTimeouts(t0.AddMilliseconds(2000), isEndOfFile: true);
+        DateTime eofVirtualTime = t0.AddMilliseconds(2000).AddTicks(2500);
+        var eof = engine.FlushExpiredTimeouts(eofVirtualTime, isEndOfFile: true);
         var eofTx = Assert.Single(eof.Transactions);
         var eofSpan = Assert.Single(eof.TraceSpans);
 
@@ -344,8 +347,8 @@ public class VirtualClockRedEngineTests
         Assert.Equal(trace2, eofSpan.TraceId);
         Assert.Equal(span2, eofSpan.SpanId);
         Assert.Equal(req2Time, eofSpan.StartTimeUtc);
-        Assert.Equal(req2Time.AddMilliseconds(1000), eofSpan.EndTimeUtc);
-        Assert.Equal(1000.0, eofSpan.DurationMs, precision: 5);
+        Assert.Equal(eofVirtualTime, eofSpan.EndTimeUtc);
+        Assert.Equal(1000.25, eofSpan.DurationMs, precision: 5);
         Assert.Equal(SpanOriginKind.TimeoutAtEof, eofSpan.OriginKind);
         Assert.Equal(SpanStatusCode.Error, eofSpan.StatusCode);
         Assert.Equal("TIMEOUT_AT_EOF", eofSpan.StatusMessage);
@@ -356,6 +359,8 @@ public class VirtualClockRedEngineTests
         Assert.Equal(2, eofSpan.Events.Count);
         Assert.Equal(SpanEventKind.RequestSent, eofSpan.Events[0].Kind);
         Assert.Equal(SpanEventKind.TimeoutExpired, eofSpan.Events[1].Kind);
-        Assert.Equal(req2Time.AddMilliseconds(1000), eofSpan.Events[1].TimestampUtc);
+        Assert.Equal(string.Empty, eofSpan.Events[1].Name);
+        Assert.Equal(SpanOriginKind.TimeoutAtEof, eofSpan.Events[1].Fields["reason"]);
+        Assert.Equal(eofVirtualTime, eofSpan.Events[1].TimestampUtc);
     }
 }
