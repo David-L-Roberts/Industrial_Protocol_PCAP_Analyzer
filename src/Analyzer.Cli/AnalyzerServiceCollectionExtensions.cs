@@ -38,7 +38,8 @@ public static class AnalyzerServiceCollectionExtensions
             var tagEngine = sp.GetRequiredService<TagResolutionEngine>();
             var session = sp.GetService<TestSession>();
             bool storeUnmapped = session?.StoreUnmappedRegisters ?? false;
-            return new ModbusTcpDecoder(redEngine, tagEngine, storeUnmapped);
+            bool storeTraceSpans = session?.StoreTraceSpans ?? true;
+            return new ModbusTcpDecoder(redEngine, tagEngine, storeUnmapped, storeTraceSpans);
         });
 
         services.AddTransient<Dnp3Decoder>();

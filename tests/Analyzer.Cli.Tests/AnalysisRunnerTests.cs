@@ -134,6 +134,7 @@ public class AnalysisRunnerTests : IDisposable
         Assert.Equal(1, summary.SuccessTransactions);
         Assert.Equal(0, summary.ErrorTransactions);
         Assert.Equal(1, summary.DataPointsPersisted);
+        Assert.Equal(1, summary.TraceSpansPersisted);
 
         Assert.NotNull(fakeSink.InitializedSession);
         Assert.Equal("FAT_Substation_1", fakeSink.InitializedSession.Name);
@@ -142,11 +143,19 @@ public class AnalysisRunnerTests : IDisposable
         Assert.Equal(10000, fakeSink.InitializedSession.SboWindowMs);
         Assert.Equal(SessionStatus.Completed, fakeSink.CompletedStatus);
 
+        var persistedSpan = Assert.Single(fakeSink.TraceSpans);
+        var persistedTx = Assert.Single(fakeSink.Transactions);
+        var persistedDp = Assert.Single(fakeSink.DataPoints);
+        Assert.Equal(persistedSpan.TraceId, persistedTx.TraceId);
+        Assert.Equal(persistedSpan.SpanId, persistedTx.SpanId);
+        Assert.Equal(persistedSpan.TraceId, persistedDp.TraceId);
+        Assert.Equal(persistedSpan.SpanId, persistedDp.SpanId);
+
         string outputText = progressWriter.ToString();
         Assert.Contains("FAT_Substation_1", outputText);
         Assert.Contains("Total frames processed: 2", outputText);
         Assert.Contains("Transactions: 1", outputText);
-        Assert.Contains("Trace spans persisted: 0", outputText);
+        Assert.Contains("Trace spans persisted: 1", outputText);
     }
 
     [Fact]
@@ -155,18 +164,45 @@ public class AnalysisRunnerTests : IDisposable
         string pcapPath = Path.Combine(_tempDir, "no_traces_cli.pcap");
         await File.WriteAllBytesAsync(pcapPath, [0x01, 0x02]);
 
+        string csvPath = Path.Combine(_tempDir, "no_traces_tags.csv");
+        await File.WriteAllTextAsync(csvPath, """
+            Protocol,Address,TagName,DataType,Endianness,ScaleMultiplier,ScaleOffset,Units,Description
+            ModbusTCP,HR:40001,Bus_Volts_A,UINT16,,0.1,0.0,kV,Phase A Bus Voltage
+            """);
+
         string manifestPath = Path.Combine(_tempDir, "manifest_no_traces_cli.json");
         var manifestObj = new
         {
             session_name = "SAT_NoTraces_CLI",
             pcap_file = "no_traces_cli.pcap",
             store_trace_spans = true,
-            device_pairs = Array.Empty<object>()
+            device_pairs = new[]
+            {
+                new
+                {
+                    name = "RTAC_to_Relay",
+                    protocol = "ModbusTCP",
+                    client_ip = "10.0.1.10",
+                    server_ip = "10.0.1.20",
+                    client_protocol_address_id = (int?)null,
+                    server_protocol_address_id = (int?)1,
+                    tag_mapping_csv = "no_traces_tags.csv"
+                }
+            }
         };
         await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifestObj));
 
+        var clientIp = IPAddress.Parse("10.0.1.10");
+        var serverIp = IPAddress.Parse("10.0.1.20");
+        var t0 = new DateTime(2026, 10, 26, 12, 0, 0, DateTimeKind.Utc);
+        var frames = new List<DissectedFrame>
+        {
+            new(1, t0, clientIp, 50000, serverIp, 502, ProtocolType.ModbusTcp, [0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03, 0x00, 0x00, 0x00, 0x01]),
+            new(2, t0.AddMilliseconds(25), serverIp, 502, clientIp, 50000, ProtocolType.ModbusTcp, [0x00, 0x01, 0x00, 0x00, 0x00, 0x05, 0x01, 0x03, 0x02, 0x05, 0x64])
+        };
+
         var fakeSink = new FakeDataSink();
-        var infraFactory = new FakeInfraFactory(fakeSink, new FakeFrameSource([]), null);
+        var infraFactory = new FakeInfraFactory(fakeSink, new FakeFrameSource(frames), null);
 
         var services = new ServiceCollection();
         services.AddAnalyzerCoreServices();
@@ -185,6 +221,13 @@ public class AnalysisRunnerTests : IDisposable
         Assert.NotNull(fakeSink.InitializedSession);
         Assert.False(fakeSink.InitializedSession.StoreTraceSpans);
         Assert.Equal(0, summary.TraceSpansPersisted);
+        Assert.Empty(fakeSink.TraceSpans);
+        var tx = Assert.Single(fakeSink.Transactions);
+        var dp = Assert.Single(fakeSink.DataPoints);
+        Assert.Null(tx.TraceId);
+        Assert.Null(tx.SpanId);
+        Assert.Null(dp.TraceId);
+        Assert.Null(dp.SpanId);
         Assert.DoesNotContain("Trace spans persisted:", progressWriter.ToString(), StringComparison.Ordinal);
     }
 
@@ -499,8 +542,8 @@ public class AnalysisRunnerTests : IDisposable
         Assert.Equal(
             [
                 "  [00:05] Frames: 2 (1 matched) | Tx: 0 | Records: 0 | Capture time: 2026-10-26 12:00:05 UTC",
-                "  [00:10] Frames: 4 (3 matched) | Tx: 1 | Records: 1 | Capture time: 2026-10-26 12:00:10 UTC",
-                "  [01:05:00] Frames: 5 (4 matched) | Tx: 2 | Records: 2 | Capture time: 2026-10-26 12:00:10 UTC"
+                "  [00:10] Frames: 4 (3 matched) | Tx: 1 | Records: 2 | Capture time: 2026-10-26 12:00:10 UTC",
+                "  [01:05:00] Frames: 5 (4 matched) | Tx: 2 | Records: 4 | Capture time: 2026-10-26 12:00:10 UTC"
             ],
             statusLines);
 

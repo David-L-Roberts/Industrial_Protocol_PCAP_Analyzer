@@ -168,6 +168,8 @@ public class ModbusFixtureAndPipelineIntegrationTests : IAsyncLifetime
         Assert.True(summary.DataPointsPersisted > 0);
         Assert.True(summary.CommandEventsPersisted > 0);
         Assert.True(summary.UnmappedRegistersPersisted > 0);
+        Assert.True(summary.TraceSpansPersisted > 0);
+        Assert.True(summary.TraceSpansPersisted >= summary.TotalTransactions);
 
         // Verify PCAP object archived in MinIO
         using var minioClient = MinioPcapStorageService.BuildMinioClient(_config.MinioOptions);
@@ -182,7 +184,7 @@ public class ModbusFixtureAndPipelineIntegrationTests : IAsyncLifetime
         await conn.OpenAsync();
 
         await using (var sessionCmd = new NpgsqlCommand(
-            "SELECT status, s3_object_key, pcap_file_name, store_unmapped_registers FROM test_sessions WHERE id = @id;",
+            "SELECT status, s3_object_key, pcap_file_name, store_unmapped_registers, store_trace_spans FROM test_sessions WHERE id = @id;",
             conn))
         {
             sessionCmd.Parameters.AddWithValue("id", summary.SessionId);
@@ -192,6 +194,7 @@ public class ModbusFixtureAndPipelineIntegrationTests : IAsyncLifetime
             Assert.Equal(summary.S3ObjectKey, reader.GetString(1));
             Assert.Equal("ModbusSampleCapture.pcapng", reader.GetString(2));
             Assert.True(reader.GetBoolean(3));
+            Assert.True(reader.GetBoolean(4));
         }
 
         await using (var pairCmd = new NpgsqlCommand(
@@ -289,6 +292,46 @@ public class ModbusFixtureAndPipelineIntegrationTests : IAsyncLifetime
             Assert.Equal(summary.UnmappedRegistersPersisted, Convert.ToInt64(await unmappedCmd.ExecuteScalarAsync()));
         }
 
+        await using (var spansCmd = new NpgsqlCommand(
+            "SELECT trace_id, span_id, duration_ms FROM trace_spans WHERE session_id = @id;",
+            conn))
+        {
+            spansCmd.Parameters.AddWithValue("id", summary.SessionId);
+            await using var reader = await spansCmd.ExecuteReaderAsync();
+            long spanCount = 0;
+            while (await reader.ReadAsync())
+            {
+                spanCount++;
+                string traceId = reader.GetString(0);
+                string spanId = reader.GetString(1);
+                double durationMs = reader.GetDouble(2);
+                Assert.True(TraceId.TryParse(traceId, out var parsedTrace) && parsedTrace.Value == traceId);
+                Assert.True(SpanId.TryParse(spanId, out var parsedSpan) && parsedSpan.Value == spanId);
+                Assert.True(durationMs >= 0.0);
+            }
+
+            Assert.Equal(summary.TraceSpansPersisted, spanCount);
+        }
+
+        string[] correlatedTables = ["red_transactions", "captured_command_events", "tag_values"];
+        foreach (string table in correlatedTables)
+        {
+            await using var corrCmd = new NpgsqlCommand(
+                $"""
+                SELECT COUNT(*)
+                FROM {table} t
+                LEFT JOIN trace_spans s
+                    ON s.session_id = t.session_id
+                   AND s.trace_id = t.trace_id
+                   AND s.span_id = t.span_id
+                WHERE t.session_id = @id
+                  AND (t.trace_id IS NULL OR t.span_id IS NULL OR s.span_id IS NULL);
+                """,
+                conn);
+            corrCmd.Parameters.AddWithValue("id", summary.SessionId);
+            Assert.Equal(0L, Convert.ToInt64(await corrCmd.ExecuteScalarAsync()));
+        }
+
         if (!_config.KeepTestData)
         {
             await using var dataSource = NpgsqlDataSource.Create(_config.TimescaleConnectionString);
@@ -310,6 +353,12 @@ public class ModbusFixtureAndPipelineIntegrationTests : IAsyncLifetime
                 conn);
             verifyDeletedCmd.Parameters.AddWithValue("id", summary.SessionId);
             Assert.Equal(0L, Convert.ToInt64(await verifyDeletedCmd.ExecuteScalarAsync()));
+
+            await using var verifySpansDeletedCmd = new NpgsqlCommand(
+                "SELECT COUNT(*) FROM trace_spans WHERE session_id = @id;",
+                conn);
+            verifySpansDeletedCmd.Parameters.AddWithValue("id", summary.SessionId);
+            Assert.Equal(0L, Convert.ToInt64(await verifySpansDeletedCmd.ExecuteScalarAsync()));
 
             await Assert.ThrowsAsync<ObjectNotFoundException>(() =>
                 minioClient.StatObjectAsync(
