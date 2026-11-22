@@ -68,6 +68,24 @@ internal static class Dnp3ObjectAddressing
         return remainingFromQualifier.Length >= totalObjectSectionBytes;
     }
 
+    public static bool TryComputeRequestHeaderSectionLength(
+        ReadOnlySpan<byte> remainingFromQualifier,
+        out int headerSectionBytes)
+    {
+        headerSectionBytes = 0;
+        if (!TryParseRangeHeader(remainingFromQualifier, out var range))
+        {
+            return false;
+        }
+
+        int indexBytes = range.PrefixSize > 0 && range.RangeCode is 0x07 or 0x08
+            ? range.ItemCount * range.PrefixSize
+            : 0;
+
+        headerSectionBytes = range.HeaderAndRangeBytes + indexBytes;
+        return remainingFromQualifier.Length >= headerSectionBytes;
+    }
+
     public static bool TryParsePackedBitHeader(
         ReadOnlySpan<byte> objectData,
         out int startIndex,

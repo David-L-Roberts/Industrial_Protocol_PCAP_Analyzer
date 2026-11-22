@@ -42,7 +42,15 @@ public static class AnalyzerServiceCollectionExtensions
             return new ModbusTcpDecoder(redEngine, tagEngine, storeUnmapped, storeTraceSpans);
         });
 
-        services.AddTransient<Dnp3Decoder>();
+        services.AddTransient<Dnp3Decoder>(sp =>
+        {
+            var redEngine = sp.GetRequiredService<VirtualClockRedEngine>();
+            var handlerRegistry = sp.GetRequiredService<Dnp3HandlerRegistry>();
+            var tagEngine = sp.GetService<TagResolutionEngine>();
+            var session = sp.GetService<TestSession>();
+            bool storeTraceSpans = session?.StoreTraceSpans ?? true;
+            return new Dnp3Decoder(redEngine, handlerRegistry, tagEngine, storeTraceSpans);
+        });
 
         services.AddTransient<IProtocolDecoder>(sp => sp.GetRequiredService<ModbusTcpDecoder>());
         services.AddTransient<IProtocolDecoder>(sp => sp.GetRequiredService<Dnp3Decoder>());

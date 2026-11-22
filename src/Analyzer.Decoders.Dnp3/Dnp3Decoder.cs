@@ -8,25 +8,52 @@ using Analyzer.Decoders.Dnp3.Registry;
 
 namespace Analyzer.Decoders.Dnp3;
 
+public enum Dnp3FunctionCode : byte
+{
+    Confirm = 0x00,
+    Read = 0x01,
+    Write = 0x02,
+    Select = 0x03,
+    Operate = 0x04,
+    DirectOperate = 0x05,
+    DirectOperateNoAck = 0x06,
+    ColdRestart = 0x0D,
+    WarmRestart = 0x0E,
+    EnableUnsolicited = 0x14,
+    DisableUnsolicited = 0x15,
+    DelayMeasure = 0x17,
+    Response = 0x81,
+    UnsolicitedResponse = 0x82
+}
+
 public class Dnp3Decoder : IProtocolDecoder
 {
     private const byte StartByte1 = 0x05;
     private const byte StartByte2 = 0x64;
     private const int MinLinkHeaderBytes = 10;
     private const int MinLinkLengthField = 5;
-    private const byte AppSequenceMask = 0x0F;
+
+    private readonly record struct Dnp3RequestContext(
+        byte RequestFunctionCode,
+        Dnp3TagChangeEventCollector? RequestTagCollector);
 
     private readonly VirtualClockRedEngine _redEngine;
     private readonly Dnp3HandlerRegistry _handlerRegistry;
+    private readonly TagResolutionEngine? _tagEngine;
+    private readonly bool _storeTraceSpans;
 
     public Dnp3Decoder(
         VirtualClockRedEngine redEngine,
-        Dnp3HandlerRegistry handlerRegistry)
+        Dnp3HandlerRegistry handlerRegistry,
+        TagResolutionEngine? tagEngine = null,
+        bool storeTraceSpans = true)
     {
         ArgumentNullException.ThrowIfNull(redEngine);
         ArgumentNullException.ThrowIfNull(handlerRegistry);
         _redEngine = redEngine;
         _handlerRegistry = handlerRegistry;
+        _tagEngine = tagEngine;
+        _storeTraceSpans = storeTraceSpans;
     }
 
     public ProtocolType Protocol => ProtocolType.Dnp3;
@@ -43,94 +70,280 @@ public class Dnp3Decoder : IProtocolDecoder
 
         if (!TryStripDataLinkAndTransport(payload, out ushort destinationAddress, out ushort sourceAddress, out byte[] appFragment))
         {
-            return CreateMalformedOutput(frame, pair, direction, transactionId: "0", functionCode: 0);
+            return CreateMalformedOutput(
+                frame,
+                pair,
+                direction,
+                transactionId: "0",
+                functionCode: 0,
+                sourceAddress: null,
+                destinationAddress: null,
+                appControl: null);
         }
 
         if (!MatchesEndpointAddresses(pair, direction, sourceAddress, destinationAddress))
         {
-            return new ProtocolDecodeOutput([], [], [], []);
+            return new ProtocolDecodeOutput([], [], [], [], []);
         }
 
         ReadOnlySpan<byte> appSpan = appFragment;
         int minAppHeaderLen = direction == TrafficDirection.ServerToClient ? 4 : 2;
         if (appSpan.Length < minAppHeaderLen)
         {
-            string partialSeq = appSpan.Length >= 1
-                ? (appSpan[0] & AppSequenceMask).ToString(CultureInfo.InvariantCulture)
+            Dnp3AppControl? partialAppControl = appSpan.Length >= 1
+                ? Dnp3AppControl.Parse(appSpan[0])
+                : null;
+            string partialSeq = partialAppControl.HasValue
+                ? partialAppControl.Value.Seq.ToString(CultureInfo.InvariantCulture)
                 : "0";
             short partialFc = appSpan.Length >= 2 ? appSpan[1] : (short)0;
-            return CreateMalformedOutput(frame, pair, direction, partialSeq, partialFc);
+
+            return CreateMalformedOutput(
+                frame,
+                pair,
+                direction,
+                partialSeq,
+                partialFc,
+                sourceAddress,
+                destinationAddress,
+                partialAppControl);
         }
 
-        byte appControl = appSpan[0];
+        var appControl = Dnp3AppControl.Parse(appSpan[0]);
         byte functionCode = appSpan[1];
-        int appSeq = appControl & AppSequenceMask;
-        string transactionId = appSeq.ToString(CultureInfo.InvariantCulture);
+        string transactionId = appControl.Seq.ToString(CultureInfo.InvariantCulture);
 
         int clientAddr = direction == TrafficDirection.ClientToServer ? sourceAddress : destinationAddress;
         int serverAddr = direction == TrafficDirection.ClientToServer ? destinationAddress : sourceAddress;
         string correlationKey = $"{clientAddr}:{serverAddr}:{transactionId}";
 
+        var metadata = new Dnp3FrameMetadata(
+            Frame: frame,
+            Pair: pair,
+            Direction: direction,
+            TransactionId: transactionId,
+            FunctionCode: functionCode,
+            SourceAddress: sourceAddress,
+            DestinationAddress: destinationAddress,
+            AppControl: appControl);
+
         var transactions = new List<ProtocolTransactionRecord>();
         var dataPoints = new List<ExtractedDataPointRecord>();
         var commandEvents = new List<CapturedCommandEventRecord>();
+        var traceSpans = new List<TraceSpanRecord>();
 
         if (direction == TrafficDirection.ClientToServer)
         {
-            if (IsResponseExpectedRequestFunction(functionCode))
-            {
-                _redEngine.RegisterRequest(
-                    sessionId: pair.SessionId,
-                    devicePairId: pair.Id,
-                    frameNumber: frame.FrameNumber,
-                    timestampUtc: frame.TimestampUtc,
-                    transactionId: transactionId,
-                    functionCode: functionCode,
-                    correlationKey: correlationKey);
-            }
-
-            if (IsPayloadBearingClientFunction(functionCode))
-            {
-                DispatchObjects(frame, pair, direction, appSpan[2..], dataPoints, commandEvents);
-            }
+            ProcessClientFrame(
+                metadata,
+                functionCode,
+                correlationKey,
+                appSpan[2..],
+                dataPoints,
+                commandEvents,
+                traceSpans);
         }
         else
         {
-            byte iin1 = appSpan[2];
-            byte iin2 = appSpan[3];
-            bool isException = TryMapIinErrorStatusCode(iin1, iin2, out var statusCode);
-
-            if (functionCode == 0x81 &&
-                _redEngine.TryCompleteResponse(
-                    devicePairId: pair.Id,
-                    transactionId: transactionId,
-                    responseFrameNumber: frame.FrameNumber,
-                    responseTimestampUtc: frame.TimestampUtc,
-                    responseFunctionCode: functionCode,
-                    isException: isException,
-                    statusCode: statusCode,
-                    out var tx,
-                    correlationKey: correlationKey))
-            {
-                transactions.Add(tx);
-            }
-
-            DispatchObjects(frame, pair, direction, appSpan[4..], dataPoints, commandEvents);
+            ProcessServerFrame(
+                metadata,
+                appControl,
+                functionCode,
+                correlationKey,
+                appSpan[2],
+                appSpan[3],
+                appSpan[4..],
+                transactions,
+                dataPoints,
+                commandEvents,
+                traceSpans);
         }
 
-        return new ProtocolDecodeOutput(transactions, dataPoints, commandEvents, []);
+        return new ProtocolDecodeOutput(transactions, dataPoints, commandEvents, [], traceSpans);
     }
 
     public TimeoutFlushOutput FlushExpiredTimeouts(DateTime currentVirtualTime, bool isEndOfFile) =>
         _redEngine.FlushExpiredTimeouts(currentVirtualTime, isEndOfFile);
 
-    private void DispatchObjects(
+    private void ProcessClientFrame(
+        Dnp3FrameMetadata metadata,
+        byte functionCode,
+        string correlationKey,
+        ReadOnlySpan<byte> objectsPayload,
+        List<ExtractedDataPointRecord> dataPoints,
+        List<CapturedCommandEventRecord> commandEvents,
+        List<TraceSpanRecord> traceSpans)
+    {
+        if (functionCode == (byte)Dnp3FunctionCode.DirectOperateNoAck)
+        {
+            var objectGroups = new List<Dnp3ObjectGroupId>();
+            ScanObjectSections(
+                metadata.Frame,
+                metadata.Pair,
+                metadata.Direction,
+                objectsPayload,
+                dispatchHandlers: true,
+                dataPoints,
+                commandEvents,
+                objectGroups);
+
+            if (_storeTraceSpans)
+            {
+                var ids = Dnp3SpanCorrelationIds.Allocate(metadata.Pair, metadata.Frame.FrameNumber, SpanCorrelationRole.DirectNoAck);
+                StampCorrelationIds(dataPoints, commandEvents, ids.TraceId, ids.SpanId);
+                var tagCollector = CollectTagChanges(dataPoints);
+                traceSpans.Add(Dnp3SpanFactory.CreateDirectNoAckSpan(
+                    metadata,
+                    ids,
+                    objectGroups,
+                    commandEvents,
+                    tagCollector));
+            }
+
+            return;
+        }
+
+        if (!IsResponseExpectedRequestFunction(functionCode))
+        {
+            return;
+        }
+
+        var requestObjectGroups = new List<Dnp3ObjectGroupId>();
+        ScanObjectSections(
+            metadata.Frame,
+            metadata.Pair,
+            metadata.Direction,
+            objectsPayload,
+            dispatchHandlers: IsPayloadBearingClientFunction(functionCode),
+            dataPoints,
+            commandEvents,
+            requestObjectGroups);
+
+        PendingSpanContext? spanContext = null;
+        Dnp3TagChangeEventCollector? requestTagCollector = null;
+
+        if (_storeTraceSpans)
+        {
+            var role = functionCode == (byte)Dnp3FunctionCode.Select
+                ? SpanCorrelationRole.SboSelect
+                : SpanCorrelationRole.Transaction;
+            var ids = Dnp3SpanCorrelationIds.Allocate(metadata.Pair, metadata.Frame.FrameNumber, role);
+            StampCorrelationIds(dataPoints, commandEvents, ids.TraceId, ids.SpanId);
+
+            if (dataPoints.Count > 0)
+            {
+                requestTagCollector = CollectTagChanges(dataPoints);
+            }
+
+            spanContext = Dnp3SpanFactory.CreateRequestPendingSpanContext(
+                metadata,
+                ids,
+                requestObjectGroups,
+                commandEvents,
+                requestTagCollector);
+        }
+
+        var reqContext = new Dnp3RequestContext(functionCode, requestTagCollector);
+        _redEngine.RegisterRequest(
+            sessionId: metadata.Pair.SessionId,
+            devicePairId: metadata.Pair.Id,
+            frameNumber: metadata.Frame.FrameNumber,
+            timestampUtc: metadata.Frame.TimestampUtc,
+            transactionId: metadata.TransactionId,
+            functionCode: functionCode,
+            requestContext: reqContext,
+            correlationKey: correlationKey,
+            spanContext: spanContext);
+    }
+
+    private void ProcessServerFrame(
+        Dnp3FrameMetadata metadata,
+        Dnp3AppControl appControl,
+        byte functionCode,
+        string correlationKey,
+        byte iin1,
+        byte iin2,
+        ReadOnlySpan<byte> objectsPayload,
+        List<ProtocolTransactionRecord> transactions,
+        List<ExtractedDataPointRecord> dataPoints,
+        List<CapturedCommandEventRecord> commandEvents,
+        List<TraceSpanRecord> traceSpans)
+    {
+        bool isException = TryMapIinErrorStatusCode(iin1, iin2, out var statusCode);
+        var iinStatus = new Dnp3IinStatus(iin1, iin2, isException, statusCode);
+        var responseObjectGroups = new List<Dnp3ObjectGroupId>();
+        ScanObjectSections(
+            metadata.Frame,
+            metadata.Pair,
+            metadata.Direction,
+            objectsPayload,
+            dispatchHandlers: true,
+            dataPoints,
+            commandEvents,
+            responseObjectGroups);
+
+        if (functionCode == (byte)Dnp3FunctionCode.Response &&
+            _redEngine.TryCompleteResponse<Dnp3RequestContext>(
+                devicePairId: metadata.Pair.Id,
+                transactionId: metadata.TransactionId,
+                responseFrameNumber: metadata.Frame.FrameNumber,
+                responseTimestampUtc: metadata.Frame.TimestampUtc,
+                responseFunctionCode: functionCode,
+                isException: isException,
+                statusCode: statusCode,
+                out var tx,
+                out var reqContext,
+                out var spanContext,
+                correlationKey: correlationKey))
+        {
+            transactions.Add(tx);
+
+            if (_storeTraceSpans && spanContext is not null)
+            {
+                StampCorrelationIds(dataPoints, commandEvents, spanContext.TraceId, spanContext.SpanId);
+                var responseTagCollector = CollectTagChanges(dataPoints);
+                traceSpans.Add(Dnp3SpanFactory.CreateResponseSpan(
+                    responseFrame: metadata.Frame,
+                    transaction: tx,
+                    spanContext: spanContext,
+                    requestFunctionCode: reqContext.RequestFunctionCode,
+                    responseAppControl: appControl,
+                    iinStatus: iinStatus,
+                    responseObjectGroups: responseObjectGroups,
+                    responseCommands: commandEvents,
+                    requestTagCollector: reqContext.RequestTagCollector,
+                    responseTagCollector: responseTagCollector));
+            }
+
+            return;
+        }
+
+        if (!_storeTraceSpans)
+        {
+            return;
+        }
+
+        bool isUnsolicited = functionCode == (byte)Dnp3FunctionCode.UnsolicitedResponse;
+        var role = isUnsolicited ? SpanCorrelationRole.UnsolicitedResponse : SpanCorrelationRole.OrphanResponse;
+        var ids = Dnp3SpanCorrelationIds.Allocate(metadata.Pair, metadata.Frame.FrameNumber, role);
+
+        StampCorrelationIds(dataPoints, commandEvents, ids.TraceId, ids.SpanId);
+        var tagCollector = CollectTagChanges(dataPoints);
+        var span = isUnsolicited
+            ? Dnp3SpanFactory.CreateUnsolicitedSpan(metadata, ids, iinStatus, responseObjectGroups, commandEvents, tagCollector)
+            : Dnp3SpanFactory.CreateOrphanResponseSpan(metadata, ids, iinStatus, responseObjectGroups, commandEvents, tagCollector);
+        traceSpans.Add(span);
+    }
+
+    private void ScanObjectSections(
         DissectedFrame frame,
         DeviceEndpointPair pair,
         TrafficDirection direction,
         ReadOnlySpan<byte> objectsPayload,
+        bool dispatchHandlers,
         List<ExtractedDataPointRecord> dataPoints,
-        List<CapturedCommandEventRecord> commandEvents)
+        List<CapturedCommandEventRecord> commandEvents,
+        List<Dnp3ObjectGroupId> objectGroupsOut)
     {
         int cursor = 0;
 
@@ -140,18 +353,24 @@ public class Dnp3Decoder : IProtocolDecoder
             ushort variation = objectsPayload[cursor + 1];
             ReadOnlySpan<byte> remainingFromQualifier = objectsPayload[(cursor + 2)..];
 
-            if (!Dnp3ObjectAddressing.TryComputeObjectSectionLength(
-                    group,
-                    variation,
-                    remainingFromQualifier,
-                    out int sectionLength))
+            bool parsedSection = dispatchHandlers
+                ? Dnp3ObjectAddressing.TryComputeObjectSectionLength(group, variation, remainingFromQualifier, out int sectionLength)
+                : Dnp3ObjectAddressing.TryComputeRequestHeaderSectionLength(remainingFromQualifier, out sectionLength);
+
+            if (!parsedSection)
             {
                 break;
             }
 
-            ReadOnlySpan<byte> objectData = remainingFromQualifier[..sectionLength];
-            if (_handlerRegistry.TryGetHandler(group, out var handler))
+            var groupId = new Dnp3ObjectGroupId(group, variation);
+            if (!objectGroupsOut.Contains(groupId))
             {
+                objectGroupsOut.Add(groupId);
+            }
+
+            if (dispatchHandlers && _handlerRegistry.TryGetHandler(group, out var handler))
+            {
+                ReadOnlySpan<byte> objectData = remainingFromQualifier[..sectionLength];
                 handler.ExtractObjects(
                     frame,
                     pair,
@@ -166,11 +385,39 @@ public class Dnp3Decoder : IProtocolDecoder
         }
     }
 
+    private Dnp3TagChangeEventCollector CollectTagChanges(IReadOnlyList<ExtractedDataPointRecord> dataPoints)
+    {
+        var collector = new Dnp3TagChangeEventCollector();
+        collector.Record(dataPoints, _tagEngine);
+        return collector;
+    }
+
+    private static void StampCorrelationIds(
+        List<ExtractedDataPointRecord> dataPoints,
+        List<CapturedCommandEventRecord> commandEvents,
+        TraceId traceId,
+        SpanId spanId)
+    {
+        for (int i = 0; i < dataPoints.Count; i++)
+        {
+            dataPoints[i] = dataPoints[i] with { TraceId = traceId, SpanId = spanId };
+        }
+
+        for (int i = 0; i < commandEvents.Count; i++)
+        {
+            commandEvents[i] = commandEvents[i] with { TraceId = traceId, SpanId = spanId };
+        }
+    }
+
     private static bool IsResponseExpectedRequestFunction(byte functionCode) =>
-        functionCode is not (0x00 or 0x06); // Exclude Confirm (0x00) and Direct Operate No Ack (0x06)
+        functionCode is not ((byte)Dnp3FunctionCode.Confirm or (byte)Dnp3FunctionCode.DirectOperateNoAck);
 
     private static bool IsPayloadBearingClientFunction(byte functionCode) =>
-        functionCode is 0x02 or 0x03 or 0x04 or 0x05 or 0x06; // Write, Select, Operate, DirectOperate, DirectOperateNoAck
+        functionCode is (byte)Dnp3FunctionCode.Write
+            or (byte)Dnp3FunctionCode.Select
+            or (byte)Dnp3FunctionCode.Operate
+            or (byte)Dnp3FunctionCode.DirectOperate
+            or (byte)Dnp3FunctionCode.DirectOperateNoAck;
 
     public static bool TryStripDataLinkAndTransport(
         ReadOnlySpan<byte> payload,
@@ -299,13 +546,37 @@ public class Dnp3Decoder : IProtocolDecoder
         return false;
     }
 
-    private static ProtocolDecodeOutput CreateMalformedOutput(
+    private ProtocolDecodeOutput CreateMalformedOutput(
         DissectedFrame frame,
         DeviceEndpointPair pair,
         TrafficDirection direction,
         string transactionId,
-        short functionCode)
+        short functionCode,
+        ushort? sourceAddress,
+        ushort? destinationAddress,
+        Dnp3AppControl? appControl)
     {
+        TraceId? traceId = null;
+        SpanId? spanId = null;
+        List<TraceSpanRecord> malformedSpans = [];
+
+        if (_storeTraceSpans)
+        {
+            var ids = Dnp3SpanCorrelationIds.Allocate(pair, frame.FrameNumber, SpanCorrelationRole.Malformed);
+            traceId = ids.TraceId;
+            spanId = ids.SpanId;
+            var metadata = new Dnp3FrameMetadata(
+                frame,
+                pair,
+                direction,
+                transactionId,
+                functionCode,
+                sourceAddress,
+                destinationAddress,
+                appControl);
+            malformedSpans.Add(Dnp3SpanFactory.CreateMalformedSpan(metadata, ids));
+        }
+
         var malformedTx = new ProtocolTransactionRecord(
             Timestamp: frame.TimestampUtc,
             SessionId: pair.SessionId,
@@ -317,9 +588,10 @@ public class Dnp3Decoder : IProtocolDecoder
             DurationMs: null,
             IsError: true,
             ErrorType: TransactionErrorType.Malformed,
-            StatusCode: TransactionStatusCode.Malformed);
+            StatusCode: TransactionStatusCode.Malformed,
+            TraceId: traceId,
+            SpanId: spanId);
 
-        return new ProtocolDecodeOutput([malformedTx], [], [], []);
+        return new ProtocolDecodeOutput([malformedTx], [], [], [], malformedSpans);
     }
 }
-

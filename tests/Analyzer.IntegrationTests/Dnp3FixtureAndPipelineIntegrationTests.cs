@@ -183,6 +183,7 @@ public class Dnp3FixtureAndPipelineIntegrationTests : IAsyncLifetime
         Assert.Equal(2, summary.DataPointsPersisted);
         Assert.Equal(2, summary.CommandEventsPersisted);
         Assert.Equal(0, summary.UnmappedRegistersPersisted);
+        Assert.Equal(2, summary.TraceSpansPersisted);
 
         // Verify PCAP object archived in MinIO
         using var minioClient = MinioPcapStorageService.BuildMinioClient(_config.MinioOptions);
@@ -197,7 +198,7 @@ public class Dnp3FixtureAndPipelineIntegrationTests : IAsyncLifetime
         await conn.OpenAsync();
 
         await using (var sessionCmd = new NpgsqlCommand(
-            "SELECT status, s3_object_key, pcap_file_name, store_unmapped_registers FROM test_sessions WHERE id = @id;",
+            "SELECT status, s3_object_key, pcap_file_name, store_unmapped_registers, store_trace_spans FROM test_sessions WHERE id = @id;",
             conn))
         {
             sessionCmd.Parameters.AddWithValue("id", summary.SessionId);
@@ -207,6 +208,7 @@ public class Dnp3FixtureAndPipelineIntegrationTests : IAsyncLifetime
             Assert.Equal(summary.S3ObjectKey, reader.GetString(1));
             Assert.Equal("Dnp3SampleCapture.pcap", reader.GetString(2));
             Assert.False(reader.GetBoolean(3));
+            Assert.True(reader.GetBoolean(4));
         }
 
         await using (var pairCmd = new NpgsqlCommand(
@@ -372,6 +374,92 @@ public class Dnp3FixtureAndPipelineIntegrationTests : IAsyncLifetime
                 operateEvent.RawPduBytes);
         }
 
+        // Verify persisted trace_spans and cross-table trace/span correlation
+        var spansByRequestFrame = new Dictionary<long, (string TraceId, string SpanId)>();
+        await using (var spansCmd = new NpgsqlCommand(
+            """
+            SELECT request_frame_number, trace_id, span_id, duration_ms, protocol, origin_kind, status_code, status_message, service_name, client_endpoint, server_endpoint, operation_name, function_code, transaction_id
+            FROM trace_spans
+            WHERE session_id = @id
+            ORDER BY request_frame_number ASC;
+            """,
+            conn))
+        {
+            spansCmd.Parameters.AddWithValue("id", summary.SessionId);
+            await using var reader = await spansCmd.ExecuteReaderAsync();
+            var spans = new List<(long RequestFrame, string TraceId, string SpanId, double DurationMs, string Protocol, string OriginKind, string StatusCode, string StatusMessage, string ServiceName, string ClientEndpoint, string ServerEndpoint, string OperationName, short FunctionCode, string TransactionId)>();
+            while (await reader.ReadAsync())
+            {
+                string traceId = reader.GetString(1);
+                string spanId = reader.GetString(2);
+                Assert.True(TraceId.TryParse(traceId, out var parsedTrace) && parsedTrace.Value == traceId);
+                Assert.True(SpanId.TryParse(spanId, out var parsedSpan) && parsedSpan.Value == spanId);
+
+                spans.Add((
+                    reader.GetInt64(0),
+                    traceId,
+                    spanId,
+                    reader.GetDouble(3),
+                    reader.GetString(4),
+                    reader.GetString(5),
+                    reader.GetString(6),
+                    reader.GetString(7),
+                    reader.GetString(8),
+                    reader.GetString(9),
+                    reader.GetString(10),
+                    reader.GetString(11),
+                    reader.GetInt16(12),
+                    reader.GetString(13)));
+            }
+
+            Assert.Equal(2, spans.Count);
+            Assert.All(spans, s =>
+            {
+                Assert.True(s.DurationMs >= 0.0);
+                Assert.Equal("DNP3", s.Protocol);
+                Assert.Equal("TIMEOUT_AT_EOF", s.OriginKind);
+                Assert.Equal("ERROR", s.StatusCode);
+                Assert.Equal("TIMEOUT_AT_EOF", s.StatusMessage);
+                Assert.Equal("127.0.0.1:3", s.ServiceName);
+                Assert.Equal("127.0.0.1:4", s.ClientEndpoint);
+                Assert.Equal("127.0.0.1:3", s.ServerEndpoint);
+            });
+
+            Assert.Equal((16L, "DNP3 FC04 Operate", (short)4, "2"), (spans[0].RequestFrame, spans[0].OperationName, spans[0].FunctionCode, spans[0].TransactionId));
+            Assert.Equal((24L, "DNP3 FC01 Read", (short)1, "1"), (spans[1].RequestFrame, spans[1].OperationName, spans[1].FunctionCode, spans[1].TransactionId));
+
+            foreach (var s in spans)
+            {
+                spansByRequestFrame[s.RequestFrame] = (s.TraceId, s.SpanId);
+            }
+        }
+
+        await using (var redCorrCmd = new NpgsqlCommand(
+            """
+            SELECT COUNT(*)
+            FROM red_transactions t
+            LEFT JOIN trace_spans s
+                ON s.session_id = t.session_id
+               AND s.trace_id = t.trace_id
+               AND s.span_id = t.span_id
+            WHERE t.session_id = @id
+              AND (t.trace_id IS NULL OR t.span_id IS NULL OR s.span_id IS NULL);
+            """,
+            conn))
+        {
+            redCorrCmd.Parameters.AddWithValue("id", summary.SessionId);
+            Assert.Equal(0L, Convert.ToInt64(await redCorrCmd.ExecuteScalarAsync()));
+        }
+
+        var cmdIdsByFrame = await ReadCorrelatedIdsByFrameAsync(conn, "captured_command_events", summary.SessionId);
+        var dpIdsByFrame = await ReadCorrelatedIdsByFrameAsync(conn, "tag_values", summary.SessionId);
+
+        Assert.Equal(2, cmdIdsByFrame.Count);
+        Assert.Equal(2, dpIdsByFrame.Count);
+        Assert.Equal(spansByRequestFrame[16L], cmdIdsByFrame[16L]);
+        Assert.Equal(spansByRequestFrame[16L], dpIdsByFrame[16L]);
+        Assert.Equal(cmdIdsByFrame[12L], dpIdsByFrame[12L]);
+
         if (!_config.KeepTestData)
         {
             await using var dataSource = NpgsqlDataSource.Create(_config.TimescaleConnectionString);
@@ -394,12 +482,44 @@ public class Dnp3FixtureAndPipelineIntegrationTests : IAsyncLifetime
             verifyDeletedCmd.Parameters.AddWithValue("id", summary.SessionId);
             Assert.Equal(0L, Convert.ToInt64(await verifyDeletedCmd.ExecuteScalarAsync()));
 
+            await using var verifySpansDeletedCmd = new NpgsqlCommand(
+                "SELECT COUNT(*) FROM trace_spans WHERE session_id = @id;",
+                conn);
+            verifySpansDeletedCmd.Parameters.AddWithValue("id", summary.SessionId);
+            Assert.Equal(0L, Convert.ToInt64(await verifySpansDeletedCmd.ExecuteScalarAsync()));
+
             await Assert.ThrowsAsync<ObjectNotFoundException>(() =>
                 minioClient.StatObjectAsync(
                     new StatObjectArgs()
                         .WithBucket(_config.MinioOptions.BucketName)
                         .WithObject(summary.S3ObjectKey)));
         }
+    }
+
+    private static async Task<Dictionary<long, (string TraceId, string SpanId)>> ReadCorrelatedIdsByFrameAsync(
+        NpgsqlConnection conn,
+        string tableName,
+        Guid sessionId)
+    {
+        var result = new Dictionary<long, (string TraceId, string SpanId)>();
+        await using var cmd = new NpgsqlCommand(
+            $"SELECT frame_number, trace_id, span_id FROM {tableName} WHERE session_id = @id ORDER BY frame_number ASC;",
+            conn);
+        cmd.Parameters.AddWithValue("id", sessionId);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            Assert.False(reader.IsDBNull(1));
+            Assert.False(reader.IsDBNull(2));
+            string traceId = reader.GetString(1);
+            string spanId = reader.GetString(2);
+            Assert.True(TraceId.TryParse(traceId, out var parsedTrace) && parsedTrace.Value == traceId);
+            Assert.True(SpanId.TryParse(spanId, out var parsedSpan) && parsedSpan.Value == spanId);
+            result[reader.GetInt64(0)] = (traceId, spanId);
+        }
+
+        return result;
     }
 }
 

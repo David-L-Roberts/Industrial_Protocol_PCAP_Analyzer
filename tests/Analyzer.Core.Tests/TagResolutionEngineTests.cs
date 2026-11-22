@@ -186,4 +186,30 @@ public class TagResolutionEngineTests
         Assert.False(engine.TryGetTag(otherPairId, address, out var wrongPair));
         Assert.Null(wrongPair);
     }
+
+    [Fact]
+    public void TryGetTagById_RegisteredAndUnknownTagIds_ReturnsExpectedResult()
+    {
+        var pairId = Guid.NewGuid();
+        var tagId = Guid.NewGuid();
+        var unknownTagId = Guid.NewGuid();
+        var tag = new TagDefinition(
+            Id: tagId,
+            DevicePairId: pairId,
+            TagName: "Breaker_52A_Status",
+            ProtocolAddress: ProtocolAddress.Parse("G01V02:Idx4"),
+            DataType: TagDataType.Bool,
+            ScaleMultiplier: 1.0,
+            ScaleOffset: 0.0,
+            EngineeringUnits: null,
+            Description: null);
+
+        var engine = new TagResolutionEngine([tag]);
+
+        Assert.True(engine.TryGetTagById(tagId, out var resolved));
+        Assert.Equal(tag, resolved);
+
+        Assert.False(engine.TryGetTagById(unknownTagId, out var missing));
+        Assert.Null(missing);
+    }
 }

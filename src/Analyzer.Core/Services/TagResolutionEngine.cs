@@ -11,6 +11,7 @@ public class TagResolutionEngine
         PointQualityFlags QualityFlags);
 
     private readonly Dictionary<(Guid DevicePairId, ProtocolAddress ProtocolAddress), TagDefinition> _tagsByKey;
+    private readonly Dictionary<Guid, TagDefinition> _tagsById;
     private readonly Dictionary<Guid, CachedTagState> _lastKnownStateCache = new();
     private readonly Dictionary<Guid, TagInitialState> _initialStates = new();
 
@@ -18,9 +19,11 @@ public class TagResolutionEngine
     {
         ArgumentNullException.ThrowIfNull(tags);
         _tagsByKey = new Dictionary<(Guid, ProtocolAddress), TagDefinition>();
+        _tagsById = new Dictionary<Guid, TagDefinition>();
         foreach (var tag in tags)
         {
             _tagsByKey[(tag.DevicePairId, tag.ProtocolAddress)] = tag;
+            _tagsById[tag.Id] = tag;
         }
     }
 
@@ -29,6 +32,11 @@ public class TagResolutionEngine
         ProtocolAddress protocolAddress,
         [NotNullWhen(true)] out TagDefinition? tag) =>
         _tagsByKey.TryGetValue((devicePairId, protocolAddress), out tag);
+
+    public bool TryGetTagById(
+        Guid tagId,
+        [NotNullWhen(true)] out TagDefinition? tag) =>
+        _tagsById.TryGetValue(tagId, out tag);
 
     public bool TryResolveAndProject(
         Guid sessionId,

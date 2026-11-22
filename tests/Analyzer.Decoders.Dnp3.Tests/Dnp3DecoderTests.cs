@@ -645,11 +645,16 @@ public class Dnp3DecoderTests
 
         var timeouts = decoder.FlushExpiredTimeouts(BaseTime.AddMilliseconds(1500), isEndOfFile: false);
         var timeoutTx = Assert.Single(timeouts.Transactions);
-        Assert.Empty(timeouts.TraceSpans);
+        var timeoutSpan = Assert.Single(timeouts.TraceSpans);
         Assert.Equal("1", timeoutTx.TransactionId);
         Assert.True(timeoutTx.IsError);
         Assert.Equal(TransactionErrorType.Timeout, timeoutTx.ErrorType);
         Assert.Equal(TransactionStatusCode.Timeout, timeoutTx.StatusCode);
+        Assert.Equal(timeoutTx.TraceId, timeoutSpan.TraceId);
+        Assert.Equal(timeoutTx.SpanId, timeoutSpan.SpanId);
+        Assert.Equal("DNP3 FC01 Read", timeoutSpan.OperationName);
+        Assert.Equal(SpanOriginKind.Timeout, timeoutSpan.OriginKind);
+        Assert.Equal(SpanStatusCode.Error, timeoutSpan.StatusCode);
     }
 
     /// <summary>

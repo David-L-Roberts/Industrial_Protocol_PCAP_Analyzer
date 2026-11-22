@@ -231,6 +231,135 @@ public class AnalysisRunnerTests : IDisposable
         Assert.DoesNotContain("Trace spans persisted:", progressWriter.ToString(), StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAnalysisAsync_Dnp3Pipeline_RespectsStoreTraceSpansAndWiresTagEngineIntoDecoder(bool disableTraces)
+    {
+        string pcapPath = Path.Combine(_tempDir, $"dnp3_traces_{disableTraces}.pcap");
+        await File.WriteAllBytesAsync(pcapPath, [0x01, 0x02]);
+
+        string csvPath = Path.Combine(_tempDir, $"dnp3_tags_{disableTraces}.csv");
+        await File.WriteAllTextAsync(csvPath, """
+            Protocol,Address,TagName,DataType,Endianness,ScaleMultiplier,ScaleOffset,Units,Description
+            DNP3,G30V02:Idx0,Feeder_MW,INT16,,0.01,0.0,MW,Feeder Active Power
+            """);
+
+        string manifestPath = Path.Combine(_tempDir, $"dnp3_manifest_{disableTraces}.json");
+        var manifestObj = new
+        {
+            session_name = $"SAT_Dnp3_Traces_{disableTraces}",
+            pcap_file = Path.GetFileName(pcapPath),
+            timeout_threshold_ms = 2000,
+            store_trace_spans = true,
+            device_pairs = new[]
+            {
+                new
+                {
+                    name = "Master_to_RTU",
+                    protocol = "DNP3",
+                    client_name = "SCADA_Master",
+                    server_name = "Substation_RTU",
+                    client_ip = "10.0.1.5",
+                    server_ip = "10.0.1.10",
+                    client_protocol_address_id = (int?)4,
+                    server_protocol_address_id = (int?)3,
+                    tag_mapping_csv = Path.GetFileName(csvPath)
+                }
+            }
+        };
+        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifestObj));
+
+        var clientIp = IPAddress.Parse("10.0.1.5");
+        var serverIp = IPAddress.Parse("10.0.1.10");
+        var t0 = new DateTime(2026, 11, 22, 10, 0, 0, DateTimeKind.Utc);
+        var frames = new List<DissectedFrame>
+        {
+            new(1, t0, clientIp, 50100, serverIp, 20000, ProtocolType.Dnp3,
+                BuildDnp3LinkFrame(dst: 3, src: 4, [0xC1, 0x01, 30, 2, 0x00, 0x00, 0x00])),
+            new(2, t0.AddMilliseconds(30), serverIp, 20000, clientIp, 50100, ProtocolType.Dnp3,
+                BuildDnp3LinkFrame(dst: 4, src: 3, [0xC1, 0x81, 0x00, 0x00, 30, 2, 0x00, 0x00, 0x00, 0x01, 0xD2, 0x04]))
+        };
+
+        var fakeSink = new FakeDataSink();
+        var infraFactory = new FakeInfraFactory(fakeSink, new FakeFrameSource(frames), null);
+
+        var services = new ServiceCollection();
+        services.AddAnalyzerCoreServices();
+        services.AddSingleton<IAnalysisInfrastructureFactory>(infraFactory);
+        var sp = services.BuildServiceProvider();
+
+        var runner = sp.GetRequiredService<IAnalysisRunner>();
+        var options = new AnalysisOptions(
+            ManifestPath: manifestPath,
+            DbConnectionString: "Host=localhost;Database=test",
+            DisableTraces: disableTraces);
+
+        using var progressWriter = new StringWriter();
+        var summary = await runner.RunAnalysisAsync(options, progressWriter);
+
+        Assert.NotNull(fakeSink.InitializedSession);
+        Assert.Equal(!disableTraces, fakeSink.InitializedSession.StoreTraceSpans);
+        var tx = Assert.Single(fakeSink.Transactions);
+        var dp = Assert.Single(fakeSink.DataPoints);
+
+        if (disableTraces)
+        {
+            Assert.Equal(0, summary.TraceSpansPersisted);
+            Assert.Empty(fakeSink.TraceSpans);
+            Assert.Null(tx.TraceId);
+            Assert.Null(tx.SpanId);
+            Assert.Null(dp.TraceId);
+            Assert.Null(dp.SpanId);
+            Assert.DoesNotContain("Trace spans persisted:", progressWriter.ToString(), StringComparison.Ordinal);
+        }
+        else
+        {
+            Assert.Equal(1, summary.TraceSpansPersisted);
+            var span = Assert.Single(fakeSink.TraceSpans);
+            Assert.Equal(span.TraceId, tx.TraceId);
+            Assert.Equal(span.SpanId, tx.SpanId);
+            Assert.Equal(span.TraceId, dp.TraceId);
+            Assert.Equal(span.SpanId, dp.SpanId);
+            Assert.Equal("Substation_RTU", span.ServiceName);
+            Assert.Equal("DNP3 FC01 Read", span.OperationName);
+            var tagEvent = Assert.Single(span.Events, e => e.Kind == SpanEventKind.TagValueChanged);
+            Assert.Equal("Feeder_MW", tagEvent.Fields["tag_name"]);
+            Assert.Contains("Trace spans persisted: 1", progressWriter.ToString(), StringComparison.Ordinal);
+        }
+    }
+
+    private static byte[] BuildDnp3LinkFrame(ushort dst, ushort src, ReadOnlySpan<byte> appFragment)
+    {
+        int userDataLen = 1 + appFragment.Length;
+        byte[] userBytes = new byte[userDataLen];
+        userBytes[0] = 0xC0;
+        appFragment.CopyTo(userBytes.AsSpan(1));
+
+        int numBlocks = (userDataLen + 15) / 16;
+        byte[] frame = new byte[10 + userDataLen + (numBlocks * 2)];
+        frame[0] = 0x05;
+        frame[1] = 0x64;
+        frame[2] = (byte)(5 + userDataLen);
+        frame[3] = 0xC4;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(4, 2), dst);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(frame.AsSpan(6, 2), src);
+        frame[8] = 0xAA;
+        frame[9] = 0xBB;
+
+        int srcOffset = 0;
+        int dstOffset = 10;
+        while (srcOffset < userDataLen)
+        {
+            int chunkLen = Math.Min(16, userDataLen - srcOffset);
+            userBytes.AsSpan(srcOffset, chunkLen).CopyTo(frame.AsSpan(dstOffset, chunkLen));
+            dstOffset += chunkLen + 2;
+            srcOffset += chunkLen;
+        }
+
+        return frame;
+    }
+
     [Fact]
     public async Task RunAnalysisAsync_WithManifestStoreTraceSpansFalse_PersistsOptOutAndOmitsTraceSpansSummary()
     {
