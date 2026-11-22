@@ -56,6 +56,11 @@ public class AnalysisRunner : IAnalysisRunner
         progressOutput?.WriteLine($"Parsing session manifest '{manifestFullPath}'...");
         var parsedManifest = await _manifestParser.ParseFileAsync(manifestFullPath, ct);
         var session = parsedManifest.Session;
+        if (options.DisableTraces)
+        {
+            session = session with { StoreTraceSpans = false };
+        }
+
         var devicePairs = parsedManifest.DevicePairs.Select(p => p.DevicePair).ToList();
 
         var allTags = new List<TagDefinition>();
@@ -152,6 +157,10 @@ public class AnalysisRunner : IAnalysisRunner
                 if (session.StoreUnmappedRegisters)
                 {
                     progressOutput.WriteLine($"Unmapped registers persisted: {summary.UnmappedRegistersPersisted}");
+                }
+                if (session.StoreTraceSpans)
+                {
+                    progressOutput.WriteLine($"Trace spans persisted: {summary.TraceSpansPersisted}");
                 }
                 progressOutput.WriteLine("=================================================");
             }

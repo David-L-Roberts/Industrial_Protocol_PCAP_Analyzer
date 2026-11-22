@@ -121,7 +121,7 @@ public class Dnp3Decoder : IProtocolDecoder
         return new ProtocolDecodeOutput(transactions, dataPoints, commandEvents, []);
     }
 
-    public IReadOnlyList<ProtocolTransactionRecord> FlushExpiredTimeouts(DateTime currentVirtualTime, bool isEndOfFile) =>
+    public TimeoutFlushOutput FlushExpiredTimeouts(DateTime currentVirtualTime, bool isEndOfFile) =>
         _redEngine.FlushExpiredTimeouts(currentVirtualTime, isEndOfFile);
 
     private void DispatchObjects(

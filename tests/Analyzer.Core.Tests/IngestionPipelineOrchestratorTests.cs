@@ -394,7 +394,166 @@ public class IngestionPipelineOrchestratorTests
         }
     }
 
-    private sealed class FrameMapDecoder(IReadOnlyDictionary<long, ProtocolDecodeOutput> outputsByFrame) : IProtocolDecoder
+    [Fact]
+    public async Task RunAsync_WhenStoreTraceSpansEnabled_BuffersCountsAndFlushesSpansFromFramesAndTimeouts()
+    {
+        var sessionId = Guid.NewGuid();
+        var pairId = Guid.NewGuid();
+        var clientIp = IPAddress.Parse("10.0.1.10");
+        var serverIp = IPAddress.Parse("10.0.1.20");
+        var t0 = new DateTime(2026, 10, 26, 14, 0, 0, DateTimeKind.Utc);
+        var t1 = t0.AddMilliseconds(50);
+        var t2 = t0.AddMilliseconds(1500);
+
+        var session = new TestSession(
+            Id: sessionId,
+            Name: "TraceSpan_Batching_Enabled",
+            PcapFileName: "spans.pcap",
+            S3ObjectKey: null,
+            TimeoutThresholdMs: 1000,
+            StoreUnmappedRegisters: false,
+            StoreTraceSpans: true);
+
+        var pair = new DeviceEndpointPair(pairId, sessionId, "Pair1", ProtocolType.ModbusTcp, clientIp, serverIp, null, 1, "RTAC", "Relay1");
+        var frames = new List<DissectedFrame>
+        {
+            new(1, t0, clientIp, 50001, serverIp, 502, ProtocolType.ModbusTcp, [0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03]),
+            new(2, t1, serverIp, 502, clientIp, 50001, ProtocolType.ModbusTcp, [0x00, 0x01, 0x00, 0x00, 0x00, 0x05, 0x01, 0x03, 0x02, 0x00, 0x01]),
+            new(3, t2, clientIp, 50001, serverIp, 502, ProtocolType.ModbusTcp, [0x00, 0x02, 0x00, 0x00, 0x00, 0x06, 0x01, 0x03])
+        };
+
+        var frameSpan = CreateSpan(sessionId, pairId, frameNumber: 1, role: SpanCorrelationRole.Transaction, t0, t1, SpanOriginKind.RequestResponse);
+        var midStreamSpan = CreateSpan(sessionId, pairId, frameNumber: 9, role: SpanCorrelationRole.ConfirmTimeout, t0, t2, SpanOriginKind.ConfirmTimeout);
+        var eofSpan = CreateSpan(sessionId, pairId, frameNumber: 3, role: SpanCorrelationRole.Transaction, t2, t2, SpanOriginKind.TimeoutAtEof);
+
+        var outputsByFrame = new Dictionary<long, ProtocolDecodeOutput>
+        {
+            [2] = new([], [], [], [], [frameSpan])
+        };
+
+        var progressSnapshots = new List<PipelineProgress>();
+        var progress = new SynchronousProgress<PipelineProgress>(p =>
+        {
+            if (p.Phase == PipelinePhase.DissectingPackets && p.TotalFramesProcessed > 0)
+            {
+                progressSnapshots.Add(p);
+            }
+        });
+
+        var sink = new InMemoryDataSink();
+        var decoder = new FrameMapDecoder(
+            outputsByFrame,
+            onFlush: (vt, isEof) =>
+            {
+                if (!isEof && vt == t2)
+                {
+                    return new TimeoutFlushOutput([], [midStreamSpan]);
+                }
+
+                if (isEof)
+                {
+                    return new TimeoutFlushOutput([], [eofSpan]);
+                }
+
+                return TimeoutFlushOutput.Empty;
+            });
+
+        // batchSize = 2 so frameSpan (1) + midStreamSpan (1) triggers mid-stream flush before EOF flush of eofSpan
+        var orchestrator = new IngestionPipelineOrchestrator(new SyntheticFrameSource(frames), [decoder], sink, batchSize: 2);
+        var summary = await orchestrator.RunAsync(session, [pair], [], "spans.pcap", progress: progress);
+
+        Assert.Equal(3, summary.TraceSpansPersisted);
+        Assert.Equal([frameSpan, midStreamSpan, eofSpan], sink.TraceSpans);
+        Assert.Equal(2, sink.WriteBatchCallCount);
+        Assert.Equal(2, progressSnapshots.Last().TotalRecordsPersisted);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenStoreTraceSpansDisabled_SkipsTraceSpansWhilePersistingOtherRecords()
+    {
+        var sessionId = Guid.NewGuid();
+        var pairId = Guid.NewGuid();
+        var clientIp = IPAddress.Parse("10.0.1.10");
+        var serverIp = IPAddress.Parse("10.0.1.20");
+        var t0 = new DateTime(2026, 10, 26, 14, 0, 0, DateTimeKind.Utc);
+        var t1 = t0.AddMilliseconds(30);
+
+        var session = new TestSession(
+            Id: sessionId,
+            Name: "TraceSpan_OptOut",
+            PcapFileName: "optout.pcap",
+            S3ObjectKey: null,
+            TimeoutThresholdMs: 1000,
+            StoreUnmappedRegisters: false,
+            StoreTraceSpans: false);
+
+        var pair = new DeviceEndpointPair(pairId, sessionId, "Pair1", ProtocolType.ModbusTcp, clientIp, serverIp, null, 1);
+        var frames = new List<DissectedFrame>
+        {
+            new(1, t1, serverIp, 502, clientIp, 50001, ProtocolType.ModbusTcp, [0x00, 0x01, 0x00, 0x00, 0x00, 0x05, 0x01, 0x03, 0x02, 0x00, 0x01])
+        };
+
+        var frameTx = new ProtocolTransactionRecord(t1, sessionId, pairId, 1, TrafficDirection.ServerToClient, "1", 3, 30.0, false, TransactionErrorType.None, TransactionStatusCode.Success);
+        var timeoutTx = new ProtocolTransactionRecord(t0, sessionId, pairId, 99, TrafficDirection.ClientToServer, "99", 3, 1000.0, true, TransactionErrorType.TimeoutAtEof, TransactionStatusCode.TimeoutAtEof);
+        var ignoredFrameSpan = CreateSpan(sessionId, pairId, 1, SpanCorrelationRole.Transaction, t0, t1, SpanOriginKind.RequestResponse);
+        var ignoredEofSpan = CreateSpan(sessionId, pairId, 99, SpanCorrelationRole.Transaction, t0, t1, SpanOriginKind.TimeoutAtEof);
+
+        var outputsByFrame = new Dictionary<long, ProtocolDecodeOutput>
+        {
+            [1] = new([frameTx], [], [], [], [ignoredFrameSpan])
+        };
+
+        var sink = new InMemoryDataSink();
+        var decoder = new FrameMapDecoder(
+            outputsByFrame,
+            onFlush: (_, isEof) => isEof ? new TimeoutFlushOutput([timeoutTx], [ignoredEofSpan]) : TimeoutFlushOutput.Empty);
+
+        var orchestrator = new IngestionPipelineOrchestrator(new SyntheticFrameSource(frames), [decoder], sink);
+        var summary = await orchestrator.RunAsync(session, [pair], [], "optout.pcap");
+
+        Assert.Equal(0, summary.TraceSpansPersisted);
+        Assert.Empty(sink.TraceSpans);
+        Assert.Equal(2, summary.TotalTransactions);
+        Assert.Equal([frameTx, timeoutTx], sink.Transactions);
+    }
+
+    private static TraceSpanRecord CreateSpan(
+        Guid sessionId,
+        Guid pairId,
+        long frameNumber,
+        SpanCorrelationRole role,
+        DateTime startUtc,
+        DateTime endUtc,
+        SpanOriginKind originKind) =>
+        new(
+            StartTimeUtc: startUtc,
+            EndTimeUtc: endUtc,
+            DurationMs: (endUtc - startUtc).TotalMilliseconds,
+            SessionId: sessionId,
+            DevicePairId: pairId,
+            TraceId: DeterministicTraceIdGenerator.CreateTraceId(sessionId, pairId, frameNumber, role),
+            SpanId: DeterministicTraceIdGenerator.CreateSpanId(sessionId, pairId, frameNumber, role),
+            ParentSpanId: null,
+            ServiceName: "Relay1",
+            OperationName: "Modbus FC03 ReadHoldingRegisters",
+            SpanKind: SpanKind.Client,
+            OriginKind: originKind,
+            StatusCode: originKind == SpanOriginKind.RequestResponse ? SpanStatusCode.Ok : SpanStatusCode.Error,
+            StatusMessage: null,
+            Protocol: ProtocolType.ModbusTcp,
+            ClientEndpoint: "RTAC",
+            ServerEndpoint: "Relay1",
+            Direction: TrafficDirection.ClientToServer,
+            RequestFrameNumber: frameNumber,
+            ResponseFrameNumber: null,
+            TransactionId: "1",
+            FunctionCode: 3,
+            Attributes: new Dictionary<string, object?>(),
+            Events: []);
+
+    private sealed class FrameMapDecoder(
+        IReadOnlyDictionary<long, ProtocolDecodeOutput> outputsByFrame,
+        Func<DateTime, bool, TimeoutFlushOutput>? onFlush = null) : IProtocolDecoder
     {
         public ProtocolType Protocol => ProtocolType.ModbusTcp;
 
@@ -403,7 +562,8 @@ public class IngestionPipelineOrchestratorTests
                 ? output
                 : new ProtocolDecodeOutput([], [], [], []);
 
-        public IReadOnlyList<ProtocolTransactionRecord> FlushExpiredTimeouts(DateTime currentVirtualTime, bool isEndOfFile) => [];
+        public TimeoutFlushOutput FlushExpiredTimeouts(DateTime currentVirtualTime, bool isEndOfFile) =>
+            onFlush?.Invoke(currentVirtualTime, isEndOfFile) ?? TimeoutFlushOutput.Empty;
     }
 
     private sealed class SynchronousProgress<T>(Action<T> handler) : IProgress<T>
@@ -517,7 +677,7 @@ public class IngestionPipelineOrchestratorTests
             return new ProtocolDecodeOutput(transactions, dataPoints, [], []);
         }
 
-        public IReadOnlyList<ProtocolTransactionRecord> FlushExpiredTimeouts(DateTime currentVirtualTime, bool isEndOfFile) =>
+        public TimeoutFlushOutput FlushExpiredTimeouts(DateTime currentVirtualTime, bool isEndOfFile) =>
             redEngine.FlushExpiredTimeouts(currentVirtualTime, isEndOfFile);
     }
 
@@ -528,6 +688,8 @@ public class IngestionPipelineOrchestratorTests
         public List<ExtractedDataPointRecord> DataPoints { get; } = [];
         public List<CapturedCommandEventRecord> CommandEvents { get; } = [];
         public List<ModbusUnmappedRecord> UnmappedRegisters { get; } = [];
+        public List<TraceSpanRecord> TraceSpans { get; } = [];
+        public int WriteBatchCallCount { get; private set; }
         public bool InitialStatesUpdated { get; private set; }
         public SessionStatus? CompletedStatus { get; private set; }
 
@@ -544,10 +706,12 @@ public class IngestionPipelineOrchestratorTests
 
         public Task WriteBatchAsync(ProtocolDecodeOutput batch, CancellationToken ct)
         {
+            WriteBatchCallCount++;
             Transactions.AddRange(batch.Transactions);
             DataPoints.AddRange(batch.DataPoints);
             CommandEvents.AddRange(batch.CommandEvents);
             UnmappedRegisters.AddRange(batch.UnmappedRegisters);
+            TraceSpans.AddRange(batch.TraceSpans);
             events?.Add("Sink:WriteBatch");
             return Task.CompletedTask;
         }

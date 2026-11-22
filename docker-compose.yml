@@ -11,7 +11,7 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - timescaledb_data:/home/postgres/pgdata/data
-      - ./docker/sql/001_init_timescaledb.sql:/docker-entrypoint-initdb.d/001_init_timescaledb.sql:ro
+      - ./docker/sql:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-analyzer} -d ${POSTGRES_DB:-protocol_analyzer}"]
       interval: 5s

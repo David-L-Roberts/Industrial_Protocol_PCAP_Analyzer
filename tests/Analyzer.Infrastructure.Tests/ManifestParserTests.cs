@@ -48,6 +48,8 @@ public class ManifestParserTests
         Assert.Equal("feeder1_capture.pcap", result.Session.PcapFileName);
         Assert.Equal(1500, result.Session.TimeoutThresholdMs);
         Assert.True(result.Session.StoreUnmappedRegisters);
+        Assert.True(result.Session.StoreTraceSpans);
+        Assert.Equal(10000, result.Session.SboWindowMs);
 
         Assert.Equal(2, result.DevicePairs.Count);
 
@@ -60,6 +62,8 @@ public class ManifestParserTests
         Assert.Equal(IPAddress.Parse("10.0.1.20"), first.DevicePair.ServerIp);
         Assert.Null(first.DevicePair.ClientProtocolAddressId);
         Assert.Equal(1, first.DevicePair.ServerProtocolAddressId);
+        Assert.Null(first.DevicePair.ClientName);
+        Assert.Null(first.DevicePair.ServerName);
         Assert.Equal("relay_modbus_tags.csv", first.TagMappingCsvPath);
 
         var second = result.DevicePairs[1];
@@ -71,7 +75,54 @@ public class ManifestParserTests
         Assert.Equal(IPAddress.Parse("10.0.1.10"), second.DevicePair.ServerIp);
         Assert.Equal(1, second.DevicePair.ClientProtocolAddressId);
         Assert.Equal(100, second.DevicePair.ServerProtocolAddressId);
+        Assert.Null(second.DevicePair.ClientName);
+        Assert.Null(second.DevicePair.ServerName);
         Assert.Equal("rtac_dnp3_tags.csv", second.TagMappingCsvPath);
+    }
+
+    [Fact]
+    public void Parse_TraceSpanConfigAndDeviceEndpointNames_ParsesTrimsAndNormalizesBlankNames()
+    {
+        const string json = """
+        {
+          "session_name": "SAT_Trace_Config",
+          "pcap_file": "trace_capture.pcap",
+          "sbo_window_ms": 5000,
+          "store_trace_spans": false,
+          "device_pairs": [
+            {
+              "name": "Named_Pair",
+              "protocol": "DNP3",
+              "client_name": "  SEL_RTAC  ",
+              "server_name": "  Feeder1_Relay  ",
+              "client_ip": "10.0.1.10",
+              "server_ip": "10.0.1.20",
+              "client_protocol_address_id": 1,
+              "server_protocol_address_id": 100
+            },
+            {
+              "name": "Blank_Name_Pair",
+              "protocol": "ModbusTCP",
+              "client_name": "   ",
+              "server_name": "",
+              "client_ip": "10.0.1.10",
+              "server_ip": "10.0.1.21",
+              "server_protocol_address_id": 1
+            }
+          ]
+        }
+        """;
+
+        var parser = new ManifestParser();
+        var result = parser.Parse(json);
+
+        Assert.False(result.Session.StoreTraceSpans);
+        Assert.Equal(5000, result.Session.SboWindowMs);
+
+        Assert.Equal("SEL_RTAC", result.DevicePairs[0].DevicePair.ClientName);
+        Assert.Equal("Feeder1_Relay", result.DevicePairs[0].DevicePair.ServerName);
+        Assert.Null(result.DevicePairs[1].DevicePair.ClientName);
+        Assert.Null(result.DevicePairs[1].DevicePair.ServerName);
     }
 
     [Fact]
@@ -91,6 +142,8 @@ public class ManifestParserTests
         Assert.NotEqual(Guid.Empty, result.Session.Id);
         Assert.Equal(2000, result.Session.TimeoutThresholdMs);
         Assert.False(result.Session.StoreUnmappedRegisters);
+        Assert.True(result.Session.StoreTraceSpans);
+        Assert.Equal(10000, result.Session.SboWindowMs);
         Assert.Empty(result.DevicePairs);
     }
 
@@ -98,6 +151,8 @@ public class ManifestParserTests
     [InlineData("""{"pcap_file": "a.pcap", "device_pairs": []}""")]
     [InlineData("""{"session_name": "S1", "device_pairs": []}""")]
     [InlineData("""{"session_name": "S1", "pcap_file": "a.pcap", "timeout_threshold_ms": 0, "device_pairs": []}""")]
+    [InlineData("""{"session_name": "S1", "pcap_file": "a.pcap", "sbo_window_ms": 0, "device_pairs": []}""")]
+    [InlineData("""{"session_name": "S1", "pcap_file": "a.pcap", "sbo_window_ms": -1, "device_pairs": []}""")]
     [InlineData("""{"session_name": "S1", "pcap_file": "a.pcap", "device_pairs": [{"name": "P1", "protocol": "UnknownProto", "client_ip": "10.0.0.1", "server_ip": "10.0.0.2"}]}""")]
     [InlineData("""{"session_name": "S1", "pcap_file": "a.pcap", "device_pairs": [{"name": "P1", "protocol": "ModbusTCP", "client_ip": "not-an-ip", "server_ip": "10.0.0.2"}]}""")]
     [InlineData("""{"session_name": "S1", "pcap_file": "a.pcap", "device_pairs": [{"name": "", "protocol": "ModbusTCP", "client_ip": "10.0.0.1", "server_ip": "10.0.0.2"}]}""")]

@@ -36,7 +36,8 @@ public class LiveInfrastructureSmokeTests
             "red_transactions",
             "tag_values",
             "captured_command_events",
-            "modbus_raw_unmapped"
+            "modbus_raw_unmapped",
+            "trace_spans"
         ];
 
         foreach (var table in expectedTables)
@@ -48,7 +49,7 @@ public class LiveInfrastructureSmokeTests
             var regClass = await tableCmd.ExecuteScalarAsync() as string;
             Assert.False(
                 string.IsNullOrWhiteSpace(regClass),
-                $"Expected table 'public.{table}' from 001_init_timescaledb.sql to exist in TimescaleDB.");
+                $"Expected table 'public.{table}' to exist in TimescaleDB.");
         }
     }
 

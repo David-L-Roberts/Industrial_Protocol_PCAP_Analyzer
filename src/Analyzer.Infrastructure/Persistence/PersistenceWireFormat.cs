@@ -1,10 +1,14 @@
+using System.Buffers;
+using System.Globalization;
+using System.Text;
+using System.Text.Json;
 using Analyzer.Core.Domain;
 
 namespace Analyzer.Infrastructure.Persistence;
 
 /// <summary>
-/// Persistence seam: serializes strongly typed domain enums into the string literals stored in TimescaleDB
-/// (see <c>sql/001_init_timescaledb.sql</c>).
+/// Persistence seam: serializes strongly typed domain enums and metadata into the wire literals and JSONB payloads
+/// stored in TimescaleDB (see <c>docker/sql/001_init_timescaledb.sql</c> and <c>002_add_trace_spans.sql</c>).
 /// </summary>
 internal static class PersistenceWireFormat
 {
@@ -133,6 +137,220 @@ internal static class PersistenceWireFormat
         ModbusRegisterType.DiscreteInput => "DISCRETE_INPUT",
         _ => throw Unmapped(value)
     };
+
+    public static string ToWire(SpanKind value) => value switch
+    {
+        SpanKind.Client => "CLIENT",
+        SpanKind.Server => "SERVER",
+        SpanKind.Producer => "PRODUCER",
+        SpanKind.Consumer => "CONSUMER",
+        SpanKind.Internal => "INTERNAL",
+        _ => throw Unmapped(value)
+    };
+
+    public static string ToWire(SpanStatusCode value) => value switch
+    {
+        SpanStatusCode.Unset => "UNSET",
+        SpanStatusCode.Ok => "OK",
+        SpanStatusCode.Error => "ERROR",
+        _ => throw Unmapped(value)
+    };
+
+    public static string ToWire(SpanOriginKind value) => value switch
+    {
+        SpanOriginKind.RequestResponse => "REQUEST_RESPONSE",
+        SpanOriginKind.Timeout => "TIMEOUT",
+        SpanOriginKind.TimeoutAtEof => "TIMEOUT_AT_EOF",
+        SpanOriginKind.Malformed => "MALFORMED",
+        SpanOriginKind.Unsolicited => "UNSOLICITED",
+        SpanOriginKind.DirectNoAck => "DIRECT_NO_ACK",
+        SpanOriginKind.Confirm => "CONFIRM",
+        SpanOriginKind.ConfirmTimeout => "CONFIRM_TIMEOUT",
+        SpanOriginKind.OrphanResponse => "ORPHAN_RESPONSE",
+        _ => throw Unmapped(value)
+    };
+
+    public static string ToWire(SpanEventKind value) => value switch
+    {
+        SpanEventKind.RequestSent => "request_sent",
+        SpanEventKind.ResponseReceived => "response_received",
+        SpanEventKind.TimeoutExpired => "timeout_expired",
+        SpanEventKind.ProtocolException => "protocol_exception",
+        SpanEventKind.CommandIssued => "command_issued",
+        SpanEventKind.TagValueChanged => "tag_value_changed",
+        SpanEventKind.ConfirmSent => "confirm_sent",
+        SpanEventKind.ConfirmTimeoutExpired => "confirm_timeout_expired",
+        _ => throw Unmapped(value)
+    };
+
+    public static string ToAttributesJson(IReadOnlyDictionary<string, object?>? attributes)
+    {
+        if (attributes is null || attributes.Count == 0)
+        {
+            return "{}";
+        }
+
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            foreach (var kvp in attributes)
+            {
+                writer.WritePropertyName(kvp.Key);
+                WriteJsonValue(writer, kvp.Value);
+            }
+
+            writer.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    public static string ToEventsJson(IReadOnlyList<SpanEventRecord>? events)
+    {
+        if (events is null || events.Count == 0)
+        {
+            return "[]";
+        }
+
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartArray();
+            foreach (var ev in events)
+            {
+                writer.WriteStartObject();
+                double epochMs = (ToUtc(ev.TimestampUtc) - DateTime.UnixEpoch).TotalMilliseconds;
+                writer.WriteNumber("timestamp", epochMs);
+                writer.WriteStartArray("fields");
+
+                string eventWire = ToWire(ev.Kind);
+                WriteKeyValueField(writer, "event", eventWire);
+
+                if (!string.IsNullOrWhiteSpace(ev.Name) &&
+                    !string.Equals(ev.Name, eventWire, StringComparison.OrdinalIgnoreCase))
+                {
+                    WriteKeyValueField(writer, "name", ev.Name);
+                }
+
+                if (ev.Fields is not null)
+                {
+                    foreach (var field in ev.Fields)
+                    {
+                        if (string.Equals(field.Key, "event", StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        WriteKeyValueField(writer, field.Key, field.Value);
+                    }
+                }
+
+                writer.WriteEndArray();
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+        }
+
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static void WriteKeyValueField(Utf8JsonWriter writer, string key, object? value)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("key", key);
+        writer.WritePropertyName("value");
+        WriteJsonValue(writer, value);
+        writer.WriteEndObject();
+    }
+
+    private static void WriteJsonValue(Utf8JsonWriter writer, object? value)
+    {
+        switch (value)
+        {
+            case null:
+                writer.WriteNullValue();
+                break;
+            case string s:
+                writer.WriteStringValue(s);
+                break;
+            case bool b:
+                writer.WriteBooleanValue(b);
+                break;
+            case int i:
+                writer.WriteNumberValue(i);
+                break;
+            case long l:
+                writer.WriteNumberValue(l);
+                break;
+            case short sh:
+                writer.WriteNumberValue(sh);
+                break;
+            case ushort us:
+                writer.WriteNumberValue(us);
+                break;
+            case uint ui:
+                writer.WriteNumberValue(ui);
+                break;
+            case ulong ul:
+                writer.WriteNumberValue(ul);
+                break;
+            case byte by:
+                writer.WriteNumberValue(by);
+                break;
+            case sbyte sby:
+                writer.WriteNumberValue(sby);
+                break;
+            case double d:
+                if (double.IsFinite(d))
+                {
+                    writer.WriteNumberValue(d);
+                }
+                else
+                {
+                    writer.WriteStringValue(d.ToString(CultureInfo.InvariantCulture));
+                }
+                break;
+            case float f:
+                if (float.IsFinite(f))
+                {
+                    writer.WriteNumberValue(f);
+                }
+                else
+                {
+                    writer.WriteStringValue(f.ToString(CultureInfo.InvariantCulture));
+                }
+                break;
+            case decimal dec:
+                writer.WriteNumberValue(dec);
+                break;
+            case Guid g:
+                writer.WriteStringValue(g.ToString("D"));
+                break;
+            case DateTime dt:
+                writer.WriteStringValue(ToUtc(dt).ToString("O", CultureInfo.InvariantCulture));
+                break;
+            case DateTimeOffset dto:
+                writer.WriteStringValue(dto.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
+                break;
+            case TraceId tid:
+                writer.WriteStringValue(tid.Value);
+                break;
+            case SpanId sid:
+                writer.WriteStringValue(sid.Value);
+                break;
+            case ProtocolAddress pa:
+                writer.WriteStringValue(pa.Value);
+                break;
+            case Enum e:
+                writer.WriteStringValue(e.ToString());
+                break;
+            default:
+                writer.WriteStringValue(Convert.ToString(value, CultureInfo.InvariantCulture) ?? string.Empty);
+                break;
+        }
+    }
 
     private static readonly (PointQualityFlags Flag, string Wire)[] QualityFlagWireNames =
     [

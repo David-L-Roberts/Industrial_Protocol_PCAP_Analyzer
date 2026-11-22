@@ -60,6 +60,12 @@ public class ManifestParser
             throw new FormatException("Manifest 'timeout_threshold_ms' must be greater than zero.");
         }
 
+        int sboWindowMs = dto.SboWindowMs ?? 10000;
+        if (sboWindowMs <= 0)
+        {
+            throw new FormatException("Manifest 'sbo_window_ms' must be greater than zero.");
+        }
+
         var resolvedSessionId = sessionId ?? Guid.NewGuid();
         var session = new TestSession(
             Id: resolvedSessionId,
@@ -67,7 +73,9 @@ public class ManifestParser
             PcapFileName: dto.PcapFile.Trim(),
             S3ObjectKey: null,
             TimeoutThresholdMs: timeoutThresholdMs,
-            StoreUnmappedRegisters: dto.StoreUnmappedRegisters ?? false);
+            StoreUnmappedRegisters: dto.StoreUnmappedRegisters ?? false,
+            StoreTraceSpans: dto.StoreTraceSpans ?? true,
+            SboWindowMs: sboWindowMs);
 
         var pairs = new List<ParsedDevicePairConfig>();
         if (dto.DevicePairs is not null)
@@ -99,7 +107,9 @@ public class ManifestParser
                     ClientIp: clientIp,
                     ServerIp: serverIp,
                     ClientProtocolAddressId: pairDto.ClientProtocolAddressId,
-                    ServerProtocolAddressId: pairDto.ServerProtocolAddressId);
+                    ServerProtocolAddressId: pairDto.ServerProtocolAddressId,
+                    ClientName: NormalizeOptionalName(pairDto.ClientName),
+                    ServerName: NormalizeOptionalName(pairDto.ServerName));
 
                 pairs.Add(new ParsedDevicePairConfig(devicePair, pairDto.TagMappingCsv));
             }
@@ -107,6 +117,9 @@ public class ManifestParser
 
         return new ParsedSessionManifest(session, pairs);
     }
+
+    private static string? NormalizeOptionalName(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     public async Task<ParsedSessionManifest> ParseFileAsync(string manifestFilePath, CancellationToken ct = default)
     {
@@ -125,8 +138,14 @@ public class ManifestParser
         [JsonPropertyName("timeout_threshold_ms")]
         public int? TimeoutThresholdMs { get; set; }
 
+        [JsonPropertyName("sbo_window_ms")]
+        public int? SboWindowMs { get; set; }
+
         [JsonPropertyName("store_unmapped_registers")]
         public bool? StoreUnmappedRegisters { get; set; }
+
+        [JsonPropertyName("store_trace_spans")]
+        public bool? StoreTraceSpans { get; set; }
 
         [JsonPropertyName("device_pairs")]
         public List<DevicePairDto>? DevicePairs { get; set; }
@@ -139,6 +158,12 @@ public class ManifestParser
 
         [JsonPropertyName("protocol")]
         public string? Protocol { get; set; }
+
+        [JsonPropertyName("client_name")]
+        public string? ClientName { get; set; }
+
+        [JsonPropertyName("server_name")]
+        public string? ServerName { get; set; }
 
         [JsonPropertyName("client_ip")]
         public string? ClientIp { get; set; }

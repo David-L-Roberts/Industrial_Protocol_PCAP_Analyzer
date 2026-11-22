@@ -1,5 +1,6 @@
 using System.Net;
 using Analyzer.Core.Domain;
+using Analyzer.Core.Services;
 using Analyzer.Infrastructure.Persistence;
 using Analyzer.IntegrationTests.Attributes;
 using Analyzer.IntegrationTests.Configuration;
@@ -54,7 +55,9 @@ public class LiveTimescaleDbBatchSinkTests : IAsyncLifetime
             PcapFileName: "substation1.pcapng",
             S3ObjectKey: $"captures/{sessionId:D}/substation1.pcapng",
             TimeoutThresholdMs: 2500,
-            StoreUnmappedRegisters: true);
+            StoreUnmappedRegisters: true,
+            StoreTraceSpans: true,
+            SboWindowMs: 12000);
 
         var pair = new DeviceEndpointPair(
             Id: pairId,
@@ -64,7 +67,9 @@ public class LiveTimescaleDbBatchSinkTests : IAsyncLifetime
             ClientIp: IPAddress.Parse("10.20.188.9"),
             ServerIp: IPAddress.Parse("10.20.188.25"),
             ClientProtocolAddressId: null,
-            ServerProtocolAddressId: 247);
+            ServerProtocolAddressId: 247,
+            ClientName: "SEL_RTAC",
+            ServerName: "Feeder1_Relay");
 
         var numericTag = new TagDefinition(
             Id: numericTagId,
@@ -97,7 +102,10 @@ public class LiveTimescaleDbBatchSinkTests : IAsyncLifetime
         await AssertTagDefinitionMetadataAsync(numericTag, expectedWireDataType: "FLOAT32", expectedWireEndianness: "CDAB");
         await AssertTagDefinitionMetadataAsync(boolTag, expectedWireDataType: "BOOL", expectedWireEndianness: "ABCD");
 
-        // 2. Write Batch 1 across all four hypertables
+        // 2. Write Batch 1 across all five hypertables
+        var traceId = DeterministicTraceIdGenerator.CreateTraceId(sessionId, pairId, 10, SpanCorrelationRole.Transaction);
+        var spanId = DeterministicTraceIdGenerator.CreateSpanId(sessionId, pairId, 10, SpanCorrelationRole.Transaction);
+
         var tx1 = new ProtocolTransactionRecord(
             Timestamp: baseTime,
             SessionId: sessionId,
@@ -109,7 +117,9 @@ public class LiveTimescaleDbBatchSinkTests : IAsyncLifetime
             DurationMs: 14.25,
             IsError: false,
             ErrorType: TransactionErrorType.None,
-            StatusCode: TransactionStatusCode.Success);
+            StatusCode: TransactionStatusCode.Success,
+            TraceId: traceId,
+            SpanId: spanId);
 
         var tx2 = new ProtocolTransactionRecord(
             Timestamp: baseTime.AddMilliseconds(50),
@@ -136,7 +146,9 @@ public class LiveTimescaleDbBatchSinkTests : IAsyncLifetime
             BooleanValue: null,
             RawHex: "44898000",
             QualityFlags: PointQualityFlags.Online,
-            IsValueChange: true);
+            IsValueChange: true,
+            TraceId: traceId,
+            SpanId: spanId);
 
         var dp1Bool = new ExtractedDataPointRecord(
             PacketTimestamp: baseTime.AddMilliseconds(10),
@@ -168,7 +180,9 @@ public class LiveTimescaleDbBatchSinkTests : IAsyncLifetime
             PulseOnMs: null,
             PulseOffMs: null,
             UnscaledCommandValue: 100.0,
-            RawPduBytes: rawPdu);
+            RawPduBytes: rawPdu,
+            TraceId: traceId,
+            SpanId: spanId);
 
         var unmapped = new ModbusUnmappedRecord(
             Timestamp: baseTime.AddMilliseconds(30),
@@ -181,8 +195,41 @@ public class LiveTimescaleDbBatchSinkTests : IAsyncLifetime
             RegisterOffset: 49999,
             RawValueHex: "ABCD");
 
+        var span = new TraceSpanRecord(
+            StartTimeUtc: baseTime.AddMilliseconds(-14.25),
+            EndTimeUtc: baseTime,
+            DurationMs: 14.25,
+            SessionId: sessionId,
+            DevicePairId: pairId,
+            TraceId: traceId,
+            SpanId: spanId,
+            ParentSpanId: null,
+            ServiceName: pair.ResolveServerEndpoint(),
+            OperationName: "Modbus FC03 ReadHoldingRegisters",
+            SpanKind: SpanKind.Client,
+            OriginKind: SpanOriginKind.RequestResponse,
+            StatusCode: SpanStatusCode.Ok,
+            StatusMessage: null,
+            Protocol: ProtocolType.ModbusTcp,
+            ClientEndpoint: pair.ResolveClientEndpoint(),
+            ServerEndpoint: pair.ResolveServerEndpoint(),
+            Direction: TrafficDirection.ClientToServer,
+            RequestFrameNumber: 9,
+            ResponseFrameNumber: 10,
+            TransactionId: "101",
+            FunctionCode: 3,
+            Attributes: new Dictionary<string, object?> { ["modbus.unit_id"] = 247 },
+            Events:
+            [
+                new SpanEventRecord(
+                    baseTime,
+                    SpanEventKind.ResponseReceived,
+                    "response_received",
+                    new Dictionary<string, object?> { ["frame"] = 10L })
+            ]);
+
         await sink.WriteBatchAsync(
-            new ProtocolDecodeOutput([tx1, tx2], [dp1Numeric, dp1Bool], [cmdEvent], [unmapped]),
+            new ProtocolDecodeOutput([tx1, tx2], [dp1Numeric, dp1Bool], [cmdEvent], [unmapped], [span]),
             CancellationToken.None);
 
         // 3. Write Batch 2 with subsequent tag values (must NOT overwrite T0 initial state)
@@ -210,7 +257,9 @@ public class LiveTimescaleDbBatchSinkTests : IAsyncLifetime
         Assert.Equal(3, await CountRowsBySessionAsync("tag_values", sessionId));
         Assert.Equal(1, await CountRowsBySessionAsync("captured_command_events", sessionId));
         Assert.Equal(1, await CountRowsBySessionAsync("modbus_raw_unmapped", sessionId));
+        Assert.Equal(1, await CountRowsBySessionAsync("trace_spans", sessionId));
 
+        await AssertTraceSpanRowAsync(sessionId, traceId, spanId);
         await AssertTagInitialStateAsync(numericTagId, expectedUnscaled: 1100.0, expectedScaled: 112.5, expectedBool: null, expectedHex: "44898000");
         await AssertTagInitialStateAsync(boolTagId, expectedUnscaled: null, expectedScaled: null, expectedBool: true, expectedHex: "01");
         await AssertCapturedCommandPduAsync(sessionId, rawPdu);
@@ -334,13 +383,40 @@ public class LiveTimescaleDbBatchSinkTests : IAsyncLifetime
             RegisterOffset: 30001,
             RawValueHex: "0001");
 
-        await sink.WriteBatchAsync(new ProtocolDecodeOutput([tx], [dp], [cmd], [unmapped]), CancellationToken.None);
+        var span = new TraceSpanRecord(
+            StartTimeUtc: baseTime,
+            EndTimeUtc: baseTime.AddMilliseconds(10),
+            DurationMs: 10.0,
+            SessionId: sessionId,
+            DevicePairId: pairId,
+            TraceId: DeterministicTraceIdGenerator.CreateTraceId(sessionId, pairId, 1, SpanCorrelationRole.Transaction),
+            SpanId: DeterministicTraceIdGenerator.CreateSpanId(sessionId, pairId, 1, SpanCorrelationRole.Transaction),
+            ParentSpanId: null,
+            ServiceName: pair.ResolveServerEndpoint(),
+            OperationName: "DNP3 FC01 Read",
+            SpanKind: SpanKind.Client,
+            OriginKind: SpanOriginKind.RequestResponse,
+            StatusCode: SpanStatusCode.Ok,
+            StatusMessage: null,
+            Protocol: ProtocolType.Dnp3,
+            ClientEndpoint: pair.ResolveClientEndpoint(),
+            ServerEndpoint: pair.ResolveServerEndpoint(),
+            Direction: TrafficDirection.ClientToServer,
+            RequestFrameNumber: 1,
+            ResponseFrameNumber: 2,
+            TransactionId: "1",
+            FunctionCode: 1,
+            Attributes: new Dictionary<string, object?>(),
+            Events: []);
+
+        await sink.WriteBatchAsync(new ProtocolDecodeOutput([tx], [dp], [cmd], [unmapped], [span]), CancellationToken.None);
 
         // Verify keepTestData: true preserves the rows
         await TimescaleTestDatabaseCleaner.CleanupSessionsIfEnabledAsync(_dataSource, [sessionId], keepTestData: true);
         Assert.Equal(1, await CountRowsByIdAsync("test_sessions", "id", sessionId));
+        Assert.Equal(1, await CountRowsBySessionAsync("trace_spans", sessionId));
 
-        // Verify keepTestData: false invokes SELECT delete_test_session(@sessionId) and cascades across all 7 tables
+        // Verify keepTestData: false invokes SELECT delete_test_session(@sessionId) and cascades across all 8 tables
         await TimescaleTestDatabaseCleaner.CleanupSessionsIfEnabledAsync(_dataSource, [sessionId], keepTestData: false);
 
         Assert.Equal(0, await CountRowsByIdAsync("test_sessions", "id", sessionId));
@@ -350,6 +426,31 @@ public class LiveTimescaleDbBatchSinkTests : IAsyncLifetime
         Assert.Equal(0, await CountRowsBySessionAsync("tag_values", sessionId));
         Assert.Equal(0, await CountRowsBySessionAsync("captured_command_events", sessionId));
         Assert.Equal(0, await CountRowsBySessionAsync("modbus_raw_unmapped", sessionId));
+        Assert.Equal(0, await CountRowsBySessionAsync("trace_spans", sessionId));
+    }
+
+    [IntegrationFact]
+    public async Task ApplyTraceSpansMigration_Twice_IsIdempotentAndCreatesHypertable()
+    {
+        var repoRoot = IntegrationTestConfig.FindRepoRoot(AppContext.BaseDirectory)
+            ?? throw new InvalidOperationException("Could not locate repository root.");
+        var migrationPath = Path.Combine(repoRoot, "docker", "sql", "002_add_trace_spans.sql");
+        Assert.True(File.Exists(migrationPath), $"Expected migration file at '{migrationPath}'.");
+
+        string migrationSql = await File.ReadAllTextAsync(migrationPath);
+
+        await using var conn = await _dataSource.OpenConnectionAsync();
+        for (int attempt = 0; attempt < 2; attempt++)
+        {
+            await using var cmd = new NpgsqlCommand(migrationSql, conn);
+            await cmd.ExecuteNonQueryAsync();
+        }
+
+        await using var verifyCmd = new NpgsqlCommand(
+            "SELECT COUNT(*) FROM timescaledb_information.hypertables WHERE hypertable_name = 'trace_spans';",
+            conn);
+        var count = Convert.ToInt64(await verifyCmd.ExecuteScalarAsync());
+        Assert.Equal(1, count);
     }
 
     private Guid TrackSession(Guid sessionId)
@@ -373,7 +474,7 @@ public class LiveTimescaleDbBatchSinkTests : IAsyncLifetime
     {
         await using var conn = await _dataSource.OpenConnectionAsync();
         await using var cmd = new NpgsqlCommand(
-            "SELECT name, pcap_file_name, s3_object_key, timeout_threshold_ms, store_unmapped_registers, status FROM test_sessions WHERE id = @id;",
+            "SELECT name, pcap_file_name, s3_object_key, timeout_threshold_ms, store_unmapped_registers, store_trace_spans, sbo_window_ms, status FROM test_sessions WHERE id = @id;",
             conn);
         cmd.Parameters.AddWithValue("id", expectedSession.Id);
 
@@ -384,14 +485,16 @@ public class LiveTimescaleDbBatchSinkTests : IAsyncLifetime
         Assert.Equal(expectedSession.S3ObjectKey, reader.IsDBNull(2) ? null : reader.GetString(2));
         Assert.Equal(expectedSession.TimeoutThresholdMs, reader.GetInt32(3));
         Assert.Equal(expectedSession.StoreUnmappedRegisters, reader.GetBoolean(4));
-        Assert.Equal(expectedWireStatus, reader.GetString(5));
+        Assert.Equal(expectedSession.StoreTraceSpans, reader.GetBoolean(5));
+        Assert.Equal(expectedSession.SboWindowMs, reader.GetInt32(6));
+        Assert.Equal(expectedWireStatus, reader.GetString(7));
     }
 
     private async Task AssertDevicePairRowAsync(DeviceEndpointPair expectedPair, string expectedWireProtocol)
     {
         await using var conn = await _dataSource.OpenConnectionAsync();
         await using var cmd = new NpgsqlCommand(
-            "SELECT session_id, name, protocol, client_ip, server_ip, client_protocol_address_id, server_protocol_address_id FROM device_pairs WHERE id = @id;",
+            "SELECT session_id, name, protocol, client_ip, server_ip, client_protocol_address_id, server_protocol_address_id, client_name, server_name FROM device_pairs WHERE id = @id;",
             conn);
         cmd.Parameters.AddWithValue("id", expectedPair.Id);
 
@@ -404,6 +507,35 @@ public class LiveTimescaleDbBatchSinkTests : IAsyncLifetime
         Assert.Equal(expectedPair.ServerIp, reader.GetFieldValue<IPAddress>(4));
         Assert.Equal(expectedPair.ClientProtocolAddressId, reader.IsDBNull(5) ? null : reader.GetInt32(5));
         Assert.Equal(expectedPair.ServerProtocolAddressId, reader.IsDBNull(6) ? null : reader.GetInt32(6));
+        Assert.Equal(expectedPair.ClientName, reader.IsDBNull(7) ? null : reader.GetString(7));
+        Assert.Equal(expectedPair.ServerName, reader.IsDBNull(8) ? null : reader.GetString(8));
+    }
+
+    private async Task AssertTraceSpanRowAsync(Guid sessionId, TraceId expectedTraceId, SpanId expectedSpanId)
+    {
+        await using var conn = await _dataSource.OpenConnectionAsync();
+        await using var cmd = new NpgsqlCommand(
+            """
+            SELECT trace_id, span_id, service_name, operation_name, span_kind, origin_kind, status_code, client_endpoint, server_endpoint, attributes::text, events::text
+            FROM trace_spans
+            WHERE session_id = @sessionId;
+            """,
+            conn);
+        cmd.Parameters.AddWithValue("sessionId", sessionId);
+
+        await using var reader = await cmd.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync(), "Expected trace_spans row.");
+        Assert.Equal(expectedTraceId.Value, reader.GetString(0));
+        Assert.Equal(expectedSpanId.Value, reader.GetString(1));
+        Assert.Equal("Feeder1_Relay", reader.GetString(2));
+        Assert.Equal("Modbus FC03 ReadHoldingRegisters", reader.GetString(3));
+        Assert.Equal("CLIENT", reader.GetString(4));
+        Assert.Equal("REQUEST_RESPONSE", reader.GetString(5));
+        Assert.Equal("OK", reader.GetString(6));
+        Assert.Equal("SEL_RTAC", reader.GetString(7));
+        Assert.Equal("Feeder1_Relay", reader.GetString(8));
+        Assert.Contains("\"modbus.unit_id\"", reader.GetString(9), StringComparison.Ordinal);
+        Assert.Contains("response_received", reader.GetString(10), StringComparison.Ordinal);
     }
 
     private async Task AssertTagDefinitionMetadataAsync(

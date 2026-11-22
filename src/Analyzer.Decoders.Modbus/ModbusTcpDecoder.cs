@@ -227,7 +227,7 @@ public class ModbusTcpDecoder : IProtocolDecoder
         return new ProtocolDecodeOutput(transactions, dataPoints, commandEvents, unmappedRegisters);
     }
 
-    public IReadOnlyList<ProtocolTransactionRecord> FlushExpiredTimeouts(DateTime currentVirtualTime, bool isEndOfFile) =>
+    public TimeoutFlushOutput FlushExpiredTimeouts(DateTime currentVirtualTime, bool isEndOfFile) =>
         _redEngine.FlushExpiredTimeouts(currentVirtualTime, isEndOfFile);
 
     private void ProcessWriteRequest(

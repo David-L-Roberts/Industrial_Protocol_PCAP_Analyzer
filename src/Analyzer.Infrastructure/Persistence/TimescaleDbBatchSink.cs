@@ -39,10 +39,12 @@ public sealed class TimescaleDbBatchSink : IDataSink
                 const string insertSessionSql = """
                     INSERT INTO test_sessions (
                         id, name, pcap_file_name, s3_object_key,
-                        timeout_threshold_ms, store_unmapped_registers, status
+                        timeout_threshold_ms, store_unmapped_registers,
+                        store_trace_spans, sbo_window_ms, status
                     ) VALUES (
                         @id, @name, @pcap_file_name, @s3_object_key,
-                        @timeout_threshold_ms, @store_unmapped_registers, @status
+                        @timeout_threshold_ms, @store_unmapped_registers,
+                        @store_trace_spans, @sbo_window_ms, @status
                     )
                     """;
 
@@ -54,6 +56,8 @@ public sealed class TimescaleDbBatchSink : IDataSink
                     new("@s3_object_key", session.S3ObjectKey, NpgsqlTypes.NpgsqlDbType.Varchar),
                     new("@timeout_threshold_ms", session.TimeoutThresholdMs, NpgsqlTypes.NpgsqlDbType.Integer),
                     new("@store_unmapped_registers", session.StoreUnmappedRegisters, NpgsqlTypes.NpgsqlDbType.Boolean),
+                    new("@store_trace_spans", session.StoreTraceSpans, NpgsqlTypes.NpgsqlDbType.Boolean),
+                    new("@sbo_window_ms", session.SboWindowMs, NpgsqlTypes.NpgsqlDbType.Integer),
                     new("@status", PersistenceWireFormat.ToWire(SessionStatus.Processing), NpgsqlTypes.NpgsqlDbType.Varchar)
                 };
 
@@ -93,7 +97,8 @@ public sealed class TimescaleDbBatchSink : IDataSink
         if (batch.Transactions.Count == 0 &&
             batch.DataPoints.Count == 0 &&
             batch.CommandEvents.Count == 0 &&
-            batch.UnmappedRegisters.Count == 0)
+            batch.UnmappedRegisters.Count == 0 &&
+            batch.TraceSpans.Count == 0)
         {
             return;
         }
@@ -105,6 +110,7 @@ public sealed class TimescaleDbBatchSink : IDataSink
                 await CopyInBatchesAsync(tx, TimescaleDbTables.TagValues, batch.DataPoints, token);
                 await CopyInBatchesAsync(tx, TimescaleDbTables.CapturedCommandEvents, batch.CommandEvents, token);
                 await CopyInBatchesAsync(tx, TimescaleDbTables.ModbusRawUnmapped, batch.UnmappedRegisters, token);
+                await CopyInBatchesAsync(tx, TimescaleDbTables.TraceSpans, batch.TraceSpans, token);
             },
             ct);
     }

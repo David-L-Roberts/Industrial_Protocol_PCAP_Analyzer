@@ -67,6 +67,11 @@ public static class AnalyzerCliApp
             getDefaultValue: () => 5000,
             description: "Batch size for database bulk copy");
 
+        var noTracesOption = new Option<bool>(
+            aliases: ["--no-traces"],
+            getDefaultValue: () => false,
+            description: "Disable generating and persisting trace spans");
+
         var analyzeCommand = new Command("analyze", "Execute a full FAT/SAT PCAP analysis session.");
         analyzeCommand.AddOption(manifestOption);
         analyzeCommand.AddOption(dbOption);
@@ -78,6 +83,7 @@ public static class AnalyzerCliApp
         analyzeCommand.AddOption(ndjsonInputOption);
         analyzeCommand.AddOption(tsharkPathOption);
         analyzeCommand.AddOption(batchSizeOption);
+        analyzeCommand.AddOption(noTracesOption);
 
         analyzeCommand.SetHandler(async (context) =>
         {
@@ -91,6 +97,7 @@ public static class AnalyzerCliApp
             var ndjson = context.ParseResult.GetValueForOption(ndjsonInputOption);
             var tshark = context.ParseResult.GetValueForOption(tsharkPathOption) ?? "tshark";
             var batchSize = context.ParseResult.GetValueForOption(batchSizeOption);
+            var noTraces = context.ParseResult.GetValueForOption(noTracesOption);
 
             var options = new AnalysisOptions(
                 ManifestPath: manifest,
@@ -102,7 +109,8 @@ public static class AnalyzerCliApp
                 S3WithSsl: s3Ssl,
                 NdjsonInputPath: ndjson,
                 TSharkPath: tshark,
-                BatchSize: batchSize);
+                BatchSize: batchSize,
+                DisableTraces: noTraces);
 
             try
             {

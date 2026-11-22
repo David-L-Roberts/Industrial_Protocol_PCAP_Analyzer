@@ -10,6 +10,7 @@ public record AnalysisOptions(
     bool S3WithSsl = false,
     string? NdjsonInputPath = null,
     string TSharkPath = "tshark",
-    int BatchSize = 5000
+    int BatchSize = 5000,
+    bool DisableTraces = false
 );
 

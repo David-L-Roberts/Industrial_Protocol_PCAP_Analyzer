@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Net;
 
 namespace Analyzer.Core.Domain;
@@ -209,7 +210,9 @@ public record TestSession(
     string PcapFileName,
     string? S3ObjectKey,
     int TimeoutThresholdMs = 2000,
-    bool StoreUnmappedRegisters = false
+    bool StoreUnmappedRegisters = false,
+    bool StoreTraceSpans = true,
+    int SboWindowMs = 10000
 );
 
 public record DeviceEndpointPair(
@@ -220,8 +223,27 @@ public record DeviceEndpointPair(
     IPAddress ClientIp,
     IPAddress ServerIp,
     int? ClientProtocolAddressId,
-    int? ServerProtocolAddressId
-);
+    int? ServerProtocolAddressId,
+    string? ClientName = null,
+    string? ServerName = null
+)
+{
+    public string ResolveClientEndpoint() => ResolveEndpoint(ClientName, ClientIp, ClientProtocolAddressId);
+
+    public string ResolveServerEndpoint() => ResolveEndpoint(ServerName, ServerIp, ServerProtocolAddressId);
+
+    private static string ResolveEndpoint(string? configuredName, IPAddress ip, int? protocolAddressId)
+    {
+        if (!string.IsNullOrWhiteSpace(configuredName))
+        {
+            return configuredName.Trim();
+        }
+
+        return protocolAddressId.HasValue
+            ? string.Create(CultureInfo.InvariantCulture, $"{ip}:{protocolAddressId.Value}")
+            : ip.ToString();
+    }
+}
 
 public record TagDefinition(
     Guid Id,
@@ -270,7 +292,9 @@ public record ProtocolTransactionRecord(
     double? DurationMs,
     bool IsError,
     TransactionErrorType ErrorType,
-    TransactionStatusCode StatusCode
+    TransactionStatusCode StatusCode,
+    TraceId? TraceId = null,
+    SpanId? SpanId = null
 );
 
 public record ExtractedDataPointRecord(
@@ -285,7 +309,9 @@ public record ExtractedDataPointRecord(
     bool? BooleanValue,
     string RawHex,
     PointQualityFlags QualityFlags,
-    bool IsValueChange
+    bool IsValueChange,
+    TraceId? TraceId = null,
+    SpanId? SpanId = null
 );
 
 public record CapturedCommandEventRecord(
@@ -303,7 +329,9 @@ public record CapturedCommandEventRecord(
     long? PulseOnMs,
     long? PulseOffMs,
     double? UnscaledCommandValue,
-    byte[] RawPduBytes
+    byte[] RawPduBytes,
+    TraceId? TraceId = null,
+    SpanId? SpanId = null
 );
 
 public record ModbusUnmappedRecord(
@@ -322,8 +350,18 @@ public record ProtocolDecodeOutput(
     IReadOnlyList<ProtocolTransactionRecord> Transactions,
     IReadOnlyList<ExtractedDataPointRecord> DataPoints,
     IReadOnlyList<CapturedCommandEventRecord> CommandEvents,
-    IReadOnlyList<ModbusUnmappedRecord> UnmappedRegisters
-);
+    IReadOnlyList<ModbusUnmappedRecord> UnmappedRegisters,
+    IReadOnlyList<TraceSpanRecord> TraceSpans)
+{
+    public ProtocolDecodeOutput(
+        IReadOnlyList<ProtocolTransactionRecord> Transactions,
+        IReadOnlyList<ExtractedDataPointRecord> DataPoints,
+        IReadOnlyList<CapturedCommandEventRecord> CommandEvents,
+        IReadOnlyList<ModbusUnmappedRecord> UnmappedRegisters)
+        : this(Transactions, DataPoints, CommandEvents, UnmappedRegisters, [])
+    {
+    }
+}
 
 public record PipelineExecutionSummary(
     long TotalFramesProcessed,
@@ -337,5 +375,6 @@ public record PipelineExecutionSummary(
     long CommandEventsPersisted,
     long UnmappedRegistersPersisted,
     Guid SessionId = default,
-    string? S3ObjectKey = null
+    string? S3ObjectKey = null,
+    long TraceSpansPersisted = 0
 );

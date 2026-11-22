@@ -138,12 +138,92 @@ public class AnalysisRunnerTests : IDisposable
         Assert.NotNull(fakeSink.InitializedSession);
         Assert.Equal("FAT_Substation_1", fakeSink.InitializedSession.Name);
         Assert.Equal("captures/archived_sample.pcap", fakeSink.InitializedSession.S3ObjectKey);
+        Assert.True(fakeSink.InitializedSession.StoreTraceSpans);
+        Assert.Equal(10000, fakeSink.InitializedSession.SboWindowMs);
         Assert.Equal(SessionStatus.Completed, fakeSink.CompletedStatus);
 
         string outputText = progressWriter.ToString();
         Assert.Contains("FAT_Substation_1", outputText);
         Assert.Contains("Total frames processed: 2", outputText);
         Assert.Contains("Transactions: 1", outputText);
+        Assert.Contains("Trace spans persisted: 0", outputText);
+    }
+
+    [Fact]
+    public async Task RunAnalysisAsync_WithDisableTracesOption_OverridesManifestAndOmitsTraceSpansSummary()
+    {
+        string pcapPath = Path.Combine(_tempDir, "no_traces_cli.pcap");
+        await File.WriteAllBytesAsync(pcapPath, [0x01, 0x02]);
+
+        string manifestPath = Path.Combine(_tempDir, "manifest_no_traces_cli.json");
+        var manifestObj = new
+        {
+            session_name = "SAT_NoTraces_CLI",
+            pcap_file = "no_traces_cli.pcap",
+            store_trace_spans = true,
+            device_pairs = Array.Empty<object>()
+        };
+        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifestObj));
+
+        var fakeSink = new FakeDataSink();
+        var infraFactory = new FakeInfraFactory(fakeSink, new FakeFrameSource([]), null);
+
+        var services = new ServiceCollection();
+        services.AddAnalyzerCoreServices();
+        services.AddSingleton<IAnalysisInfrastructureFactory>(infraFactory);
+        var sp = services.BuildServiceProvider();
+
+        var runner = sp.GetRequiredService<IAnalysisRunner>();
+        var options = new AnalysisOptions(
+            ManifestPath: manifestPath,
+            DbConnectionString: "Host=localhost;Database=test",
+            DisableTraces: true);
+
+        using var progressWriter = new StringWriter();
+        var summary = await runner.RunAnalysisAsync(options, progressWriter);
+
+        Assert.NotNull(fakeSink.InitializedSession);
+        Assert.False(fakeSink.InitializedSession.StoreTraceSpans);
+        Assert.Equal(0, summary.TraceSpansPersisted);
+        Assert.DoesNotContain("Trace spans persisted:", progressWriter.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunAnalysisAsync_WithManifestStoreTraceSpansFalse_PersistsOptOutAndOmitsTraceSpansSummary()
+    {
+        string pcapPath = Path.Combine(_tempDir, "no_traces_manifest.pcap");
+        await File.WriteAllBytesAsync(pcapPath, [0x01, 0x02]);
+
+        string manifestPath = Path.Combine(_tempDir, "manifest_no_traces.json");
+        var manifestObj = new
+        {
+            session_name = "SAT_NoTraces_Manifest",
+            pcap_file = "no_traces_manifest.pcap",
+            store_trace_spans = false,
+            device_pairs = Array.Empty<object>()
+        };
+        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifestObj));
+
+        var fakeSink = new FakeDataSink();
+        var infraFactory = new FakeInfraFactory(fakeSink, new FakeFrameSource([]), null);
+
+        var services = new ServiceCollection();
+        services.AddAnalyzerCoreServices();
+        services.AddSingleton<IAnalysisInfrastructureFactory>(infraFactory);
+        var sp = services.BuildServiceProvider();
+
+        var runner = sp.GetRequiredService<IAnalysisRunner>();
+        var options = new AnalysisOptions(
+            ManifestPath: manifestPath,
+            DbConnectionString: "Host=localhost;Database=test");
+
+        using var progressWriter = new StringWriter();
+        var summary = await runner.RunAnalysisAsync(options, progressWriter);
+
+        Assert.NotNull(fakeSink.InitializedSession);
+        Assert.False(fakeSink.InitializedSession.StoreTraceSpans);
+        Assert.Equal(0, summary.TraceSpansPersisted);
+        Assert.DoesNotContain("Trace spans persisted:", progressWriter.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -547,6 +627,7 @@ public class AnalysisRunnerTests : IDisposable
         public List<ExtractedDataPointRecord> DataPoints { get; } = [];
         public List<CapturedCommandEventRecord> CommandEvents { get; } = [];
         public List<ModbusUnmappedRecord> UnmappedRegisters { get; } = [];
+        public List<TraceSpanRecord> TraceSpans { get; } = [];
         public SessionStatus? CompletedStatus { get; private set; }
 
         public Task InitializeSessionAsync(TestSession session, IEnumerable<DeviceEndpointPair> pairs, IEnumerable<TagDefinition> tags, CancellationToken ct)
@@ -561,6 +642,7 @@ public class AnalysisRunnerTests : IDisposable
             DataPoints.AddRange(batch.DataPoints);
             CommandEvents.AddRange(batch.CommandEvents);
             UnmappedRegisters.AddRange(batch.UnmappedRegisters);
+            TraceSpans.AddRange(batch.TraceSpans);
             return Task.CompletedTask;
         }
 

@@ -14,7 +14,7 @@ public interface IProtocolDecoder
         DissectedFrame frame,
         DeviceEndpointPair pair,
         TrafficDirection direction);
-    IReadOnlyList<ProtocolTransactionRecord> FlushExpiredTimeouts(DateTime currentVirtualTime, bool isEndOfFile);
+    TimeoutFlushOutput FlushExpiredTimeouts(DateTime currentVirtualTime, bool isEndOfFile);
 }
 
 public interface IDnp3ObjectGroupHandler

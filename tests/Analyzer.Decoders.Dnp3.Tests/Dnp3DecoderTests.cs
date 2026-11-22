@@ -644,7 +644,8 @@ public class Dnp3DecoderTests
         decoder.ProcessFrame(CreateFrame(60, BaseTime, TrafficDirection.ClientToServer, reqPayload), pair, TrafficDirection.ClientToServer);
 
         var timeouts = decoder.FlushExpiredTimeouts(BaseTime.AddMilliseconds(1500), isEndOfFile: false);
-        var timeoutTx = Assert.Single(timeouts);
+        var timeoutTx = Assert.Single(timeouts.Transactions);
+        Assert.Empty(timeouts.TraceSpans);
         Assert.Equal("1", timeoutTx.TransactionId);
         Assert.True(timeoutTx.IsError);
         Assert.Equal(TransactionErrorType.Timeout, timeoutTx.ErrorType);

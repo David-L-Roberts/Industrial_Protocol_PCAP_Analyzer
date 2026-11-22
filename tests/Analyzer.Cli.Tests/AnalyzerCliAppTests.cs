@@ -32,6 +32,29 @@ public class AnalyzerCliAppTests
         Assert.Equal("http://127.0.0.1:9000", fakeRunner.LastOptions.S3Endpoint);
         Assert.Equal("custom-bucket", fakeRunner.LastOptions.S3Bucket);
         Assert.Equal("preparsed.ndjson", fakeRunner.LastOptions.NdjsonInputPath);
+        Assert.False(fakeRunner.LastOptions.DisableTraces);
+    }
+
+    [Fact]
+    public async Task RunAsync_WithNoTracesFlag_SetsDisableTracesOptionToTrue()
+    {
+        var fakeRunner = new FakeAnalysisRunner();
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+
+        string[] args =
+        [
+            "analyze",
+            "--manifest", "test_manifest.json",
+            "--db", "Host=localhost;Database=testdb",
+            "--no-traces"
+        ];
+
+        int exitCode = await AnalyzerCliApp.RunAsync(args, fakeRunner, stdout, stderr);
+
+        Assert.Equal(0, exitCode);
+        Assert.NotNull(fakeRunner.LastOptions);
+        Assert.True(fakeRunner.LastOptions.DisableTraces);
     }
 
     [Fact]

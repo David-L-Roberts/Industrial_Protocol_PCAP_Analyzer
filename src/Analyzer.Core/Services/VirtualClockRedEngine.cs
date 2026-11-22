@@ -13,7 +13,8 @@ public class VirtualClockRedEngine
         string TransactionId,
         string CorrelationKey,
         short FunctionCode,
-        object? RequestContext);
+        object? RequestContext,
+        PendingSpanContext? SpanContext);
 
     private readonly int _timeoutThresholdMs;
     private readonly Dictionary<(Guid DevicePairId, string CorrelationKey), PendingRequest> _pendingByKey = new();
@@ -37,9 +38,18 @@ public class VirtualClockRedEngine
         string transactionId,
         short functionCode,
         TContext? requestContext,
-        string? correlationKey = null)
+        string? correlationKey = null,
+        PendingSpanContext? spanContext = null)
     {
         var effectiveKey = correlationKey ?? transactionId;
+        var resolvedSpanContext = spanContext is null
+            ? null
+            : spanContext with
+            {
+                RequestTimestampUtc = spanContext.RequestTimestampUtc == default ? timestampUtc : spanContext.RequestTimestampUtc,
+                RequestFrameNumber = spanContext.RequestFrameNumber ?? frameNumber
+            };
+
         var req = new PendingRequest(
             SessionId: sessionId,
             DevicePairId: devicePairId,
@@ -48,7 +58,8 @@ public class VirtualClockRedEngine
             TransactionId: transactionId,
             CorrelationKey: effectiveKey,
             FunctionCode: functionCode,
-            RequestContext: requestContext);
+            RequestContext: requestContext,
+            SpanContext: resolvedSpanContext);
 
         _pendingByKey[(devicePairId, effectiveKey)] = req;
         _priorityQueue.Enqueue(req, timestampUtc);
@@ -61,8 +72,9 @@ public class VirtualClockRedEngine
         DateTime timestampUtc,
         string transactionId,
         short functionCode,
-        string? correlationKey = null) =>
-        RegisterRequest<object>(sessionId, devicePairId, frameNumber, timestampUtc, transactionId, functionCode, null, correlationKey);
+        string? correlationKey = null,
+        PendingSpanContext? spanContext = null) =>
+        RegisterRequest<object>(sessionId, devicePairId, frameNumber, timestampUtc, transactionId, functionCode, null, correlationKey, spanContext);
 
     public bool TryCompleteResponse<TContext>(
         Guid devicePairId,
@@ -74,6 +86,7 @@ public class VirtualClockRedEngine
         TransactionStatusCode statusCode,
         [NotNullWhen(true)] out ProtocolTransactionRecord? transaction,
         out TContext? requestContext,
+        out PendingSpanContext? spanContext,
         string? correlationKey = null)
     {
         var key = (devicePairId, correlationKey ?? transactionId);
@@ -81,11 +94,13 @@ public class VirtualClockRedEngine
         {
             transaction = null;
             requestContext = default;
+            spanContext = null;
             return false;
         }
 
         var durationMs = (responseTimestampUtc - pending.TimestampUtc).TotalMilliseconds;
         requestContext = pending.RequestContext is TContext typed ? typed : default;
+        spanContext = pending.SpanContext;
 
         transaction = new ProtocolTransactionRecord(
             Timestamp: responseTimestampUtc,
@@ -98,10 +113,60 @@ public class VirtualClockRedEngine
             DurationMs: durationMs,
             IsError: isException,
             ErrorType: isException ? TransactionErrorType.Exception : TransactionErrorType.None,
-            StatusCode: statusCode);
+            StatusCode: statusCode,
+            TraceId: pending.SpanContext?.TraceId,
+            SpanId: pending.SpanContext?.SpanId);
 
         return true;
     }
+
+    public bool TryCompleteResponse<TContext>(
+        Guid devicePairId,
+        string transactionId,
+        long responseFrameNumber,
+        DateTime responseTimestampUtc,
+        short responseFunctionCode,
+        bool isException,
+        TransactionStatusCode statusCode,
+        [NotNullWhen(true)] out ProtocolTransactionRecord? transaction,
+        out TContext? requestContext,
+        string? correlationKey = null) =>
+        TryCompleteResponse(
+            devicePairId,
+            transactionId,
+            responseFrameNumber,
+            responseTimestampUtc,
+            responseFunctionCode,
+            isException,
+            statusCode,
+            out transaction,
+            out requestContext,
+            out _,
+            correlationKey);
+
+    public bool TryCompleteResponse(
+        Guid devicePairId,
+        string transactionId,
+        long responseFrameNumber,
+        DateTime responseTimestampUtc,
+        short responseFunctionCode,
+        bool isException,
+        TransactionStatusCode statusCode,
+        [NotNullWhen(true)] out ProtocolTransactionRecord? transaction,
+        out PendingSpanContext? spanContext,
+        string? correlationKey = null) =>
+        TryCompleteResponse<object>(
+            devicePairId,
+            transactionId,
+            responseFrameNumber,
+            responseTimestampUtc,
+            responseFunctionCode,
+            isException,
+            statusCode,
+            out transaction,
+            out _,
+            out spanContext,
+            correlationKey);
 
     public bool TryCompleteResponse(
         Guid devicePairId,
@@ -123,11 +188,13 @@ public class VirtualClockRedEngine
             statusCode,
             out transaction,
             out _,
+            out _,
             correlationKey);
 
-    public IReadOnlyList<ProtocolTransactionRecord> FlushExpiredTimeouts(DateTime currentVirtualTime, bool isEndOfFile)
+    public TimeoutFlushOutput FlushExpiredTimeouts(DateTime currentVirtualTime, bool isEndOfFile)
     {
-        var results = new List<ProtocolTransactionRecord>();
+        var transactions = new List<ProtocolTransactionRecord>();
+        var traceSpans = new List<TraceSpanRecord>();
 
         while (_priorityQueue.TryPeek(out var candidate, out var reqTimestamp))
         {
@@ -154,7 +221,7 @@ public class VirtualClockRedEngine
             var statusCode = isMidStreamTimeout ? TransactionStatusCode.Timeout : TransactionStatusCode.TimeoutAtEof;
             var durationMs = isMidStreamTimeout ? _timeoutThresholdMs : Math.Max(0.0, elapsedMs);
 
-            results.Add(new ProtocolTransactionRecord(
+            transactions.Add(new ProtocolTransactionRecord(
                 Timestamp: candidate.TimestampUtc,
                 SessionId: candidate.SessionId,
                 DevicePairId: candidate.DevicePairId,
@@ -165,9 +232,57 @@ public class VirtualClockRedEngine
                 DurationMs: durationMs,
                 IsError: true,
                 ErrorType: errorType,
-                StatusCode: statusCode));
+                StatusCode: statusCode,
+                TraceId: candidate.SpanContext?.TraceId,
+                SpanId: candidate.SpanContext?.SpanId));
+
+            if (candidate.SpanContext is { } spanCtx)
+            {
+                DateTime startTimeUtc = candidate.TimestampUtc;
+                DateTime endTimeUtc = startTimeUtc.AddMilliseconds(durationMs);
+                var originKind = isMidStreamTimeout ? SpanOriginKind.Timeout : SpanOriginKind.TimeoutAtEof;
+                string statusMessage = isMidStreamTimeout ? "TIMEOUT" : "TIMEOUT_AT_EOF";
+
+                var events = new List<SpanEventRecord>(spanCtx.Events.Count + 1);
+                events.AddRange(spanCtx.Events);
+                events.Add(new SpanEventRecord(
+                    TimestampUtc: endTimeUtc,
+                    Kind: SpanEventKind.TimeoutExpired,
+                    Name: "timeout_expired",
+                    Fields: new Dictionary<string, object?>
+                    {
+                        ["timeout_ms"] = durationMs,
+                        ["reason"] = statusMessage
+                    }));
+
+                traceSpans.Add(new TraceSpanRecord(
+                    StartTimeUtc: startTimeUtc,
+                    EndTimeUtc: endTimeUtc,
+                    DurationMs: durationMs,
+                    SessionId: candidate.SessionId,
+                    DevicePairId: candidate.DevicePairId,
+                    TraceId: spanCtx.TraceId,
+                    SpanId: spanCtx.SpanId,
+                    ParentSpanId: spanCtx.ParentSpanId,
+                    ServiceName: spanCtx.ServiceName,
+                    OperationName: spanCtx.OperationName,
+                    SpanKind: spanCtx.SpanKind,
+                    OriginKind: originKind,
+                    StatusCode: SpanStatusCode.Error,
+                    StatusMessage: statusMessage,
+                    Protocol: spanCtx.Protocol,
+                    ClientEndpoint: spanCtx.ClientEndpoint,
+                    ServerEndpoint: spanCtx.ServerEndpoint,
+                    Direction: spanCtx.Direction,
+                    RequestFrameNumber: candidate.FrameNumber,
+                    ResponseFrameNumber: null,
+                    TransactionId: candidate.TransactionId,
+                    FunctionCode: candidate.FunctionCode,
+                    Attributes: spanCtx.Attributes,
+                    Events: events));
+            }
         }
 
-        return results;
+        return new TimeoutFlushOutput(transactions, traceSpans);
     }
 }
