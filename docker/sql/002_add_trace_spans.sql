@@ -142,7 +142,11 @@ WITH node_spans AS (
     CROSS JOIN LATERAL (
         SELECT
             s.client_endpoint AS node_id,
-            host(dp.client_ip) AS node_ip,
+            CASE
+                WHEN s.server_endpoint = s.client_endpoint AND dp.client_ip <> dp.server_ip
+                    THEN host(dp.client_ip) || ', ' || host(dp.server_ip)
+                ELSE host(dp.client_ip)
+            END AS node_ip,
             (s.direction = 'SERVER_TO_CLIENT' OR s.client_endpoint = s.server_endpoint) AS is_target
         UNION ALL
         SELECT

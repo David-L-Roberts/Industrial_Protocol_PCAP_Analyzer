@@ -388,7 +388,11 @@ WITH node_spans AS (
     CROSS JOIN LATERAL (
         SELECT
             s.client_endpoint AS node_id,
-            host(dp.client_ip) AS node_ip,
+            CASE
+                WHEN s.server_endpoint = s.client_endpoint AND dp.client_ip <> dp.server_ip
+                    THEN host(dp.client_ip) || ', ' || host(dp.server_ip)
+                ELSE host(dp.client_ip)
+            END AS node_ip,
             (s.direction = 'SERVER_TO_CLIENT' OR s.client_endpoint = s.server_endpoint) AS is_target
         UNION ALL
         SELECT
@@ -1098,7 +1102,7 @@ Two provisioned dashboards are loaded from `docker/grafana/dashboards/` against 
    - **Device Communication Topology (`nodeGraph`):** Queries `v_grafana_node_graph_nodes` (`refId: nodes`) and `v_grafana_node_graph_edges` (`refId: edges`), visualizing per-device volume/latency/success-vs-error arcs and directed protocol links (routing `SERVER_TO_CLIENT` unsolicited traffic from `server_endpoint` to `client_endpoint`).
    - **Trace & Span Explorer (`table`):** Summarizes traces in `trace_spans` filtered by `$session`, `$device_pair`, `$protocol`, `$status`, and `$__timeFilter` with a `trace_id` Data Link that reloads `$trace_id` on the dashboard.
    - **Trace Waterfall (`traces`):** Queries `v_grafana_traces` for `$session` and `$trace_id` to render parent/child waterfalls, `serviceTags`, `tags` (`attributes`), and `logs` (`events`).
-   - **Correlated Telemetry & Commands (`table`):** Side-by-side detail tables querying `tag_values` and `captured_command_events` for `$session` and `$trace_id`.
+   - **Correlated Telemetry & Captured Command Events (`table`):** Side-by-side detail tables querying `tag_values` and `captured_command_events` for `$session` and `$trace_id`.
    - **Time-Window Capture Waterfall (collapsible `row` + `traces`):** Groups concurrent spans across devices into `time_bucket(INTERVAL '$window_bucket', start_time_utc)` synthetic traces.
 
 ---

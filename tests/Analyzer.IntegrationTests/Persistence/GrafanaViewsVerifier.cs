@@ -6,18 +6,10 @@ using Npgsql;
 namespace Analyzer.IntegrationTests.Persistence;
 
 internal sealed record VerifiedGrafanaTraceRow(
-    Guid SessionId,
-    Guid DevicePairId,
-    DateTime StartTimeUtc,
-    string OriginKind,
-    string Protocol,
-    string TraceId,
-    string SpanId,
-    string ParentSpanId,
-    string OperationName,
-    string ServiceName,
-    double StartTimeEpochMs,
-    double DurationMs,
+    TraceId TraceId,
+    SpanId SpanId,
+    SpanId? ParentSpanId,
+    ProtocolType Protocol,
     int StatusCode,
     string StatusMessage);
 
@@ -36,7 +28,7 @@ internal sealed record VerifiedNodeGraphEdge(
     string Target,
     string MainStat,
     string SecondaryStat,
-    string DetailProtocol,
+    ProtocolType DetailProtocol,
     long DetailSpanCount,
     long DetailErrorCount,
     double DetailAvgDurationMs,
@@ -78,8 +70,7 @@ internal static class GrafanaViewsVerifier
                 return;
             }
 
-            var repoRoot = IntegrationTestConfig.FindRepoRoot(AppContext.BaseDirectory)
-                ?? throw new InvalidOperationException("Could not locate repository root.");
+            var repoRoot = IntegrationTestConfig.FindRepoRootOrThrow();
             var migrationPath = Path.Combine(repoRoot, "docker", "sql", "002_add_trace_spans.sql");
             Assert.True(File.Exists(migrationPath), $"Expected migration file at '{migrationPath}'.");
 
@@ -112,7 +103,7 @@ internal static class GrafanaViewsVerifier
         NpgsqlConnection conn,
         Guid sessionId,
         long expectedSpanCount,
-        string expectedProtocol,
+        ProtocolType expectedProtocol,
         int expectedNodeCount,
         int expectedEdgeCount,
         CancellationToken ct = default)
@@ -120,10 +111,11 @@ internal static class GrafanaViewsVerifier
         ArgumentNullException.ThrowIfNull(conn);
         await EnsureTraceSpansMigrationAppliedAsync(conn, forceReapply: false, ct);
 
-        var traces = await QueryAndAssertTracesViewAsync(conn, sessionId, expectedSpanCount, expectedProtocol, ct);
+        string expectedWireProtocol = ToWireProtocol(expectedProtocol);
+        var traces = await QueryAndAssertTracesViewAsync(conn, sessionId, expectedSpanCount, expectedProtocol, expectedWireProtocol, ct);
         await AssertTimeWindowWaterfallQueryAsync(conn, sessionId, expectedSpanCount, ct);
         var nodes = await QueryAndAssertNodesViewAsync(conn, sessionId, expectedNodeCount, ct);
-        var edges = await QueryAndAssertEdgesViewAsync(conn, sessionId, expectedProtocol, expectedEdgeCount, nodes, ct);
+        var edges = await QueryAndAssertEdgesViewAsync(conn, sessionId, expectedProtocol, expectedWireProtocol, expectedEdgeCount, nodes, ct);
 
         return new VerifiedGrafanaViewsResult(traces, nodes, edges);
     }
@@ -132,7 +124,8 @@ internal static class GrafanaViewsVerifier
         NpgsqlConnection conn,
         Guid sessionId,
         long expectedSpanCount,
-        string expectedProtocol,
+        ProtocolType expectedProtocol,
+        string expectedWireProtocol,
         CancellationToken ct)
     {
         var traces = new List<VerifiedGrafanaTraceRow>();
@@ -167,60 +160,39 @@ internal static class GrafanaViewsVerifier
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
-            Guid rowSessionId = reader.GetGuid(0);
-            Guid rowPairId = reader.GetGuid(1);
-            DateTime startTimeUtc = reader.GetDateTime(2);
-            string originKind = reader.GetString(3);
-            string protocol = reader.GetString(4);
-            string traceId = reader.GetString(5);
-            string spanId = reader.GetString(6);
-            string parentSpanId = reader.GetString(7);
-            string operationName = reader.GetString(8);
-            string serviceName = reader.GetString(9);
+            Assert.Equal(sessionId, reader.GetGuid(0));
+            Assert.NotEqual(Guid.Empty, reader.GetGuid(1));
+            Assert.True(reader.GetDateTime(2) > DateTime.UnixEpoch);
+            Assert.False(string.IsNullOrWhiteSpace(reader.GetString(3)));
+            Assert.Equal(expectedWireProtocol, reader.GetString(4));
+
+            var traceId = AssertCanonicalTraceId(reader.GetString(5));
+            var spanId = AssertCanonicalSpanId(reader.GetString(6));
+            string parentRaw = reader.GetString(7);
+            SpanId? parentSpanId = string.IsNullOrEmpty(parentRaw) ? null : AssertCanonicalSpanId(parentRaw);
+
+            Assert.False(string.IsNullOrWhiteSpace(reader.GetString(8)));
+            Assert.False(string.IsNullOrWhiteSpace(reader.GetString(9)));
+
             double startTimeMs = reader.GetDouble(10);
             double durationMs = reader.GetDouble(11);
             int statusCode = reader.GetInt32(12);
             string statusMessage = reader.GetString(13);
-            string serviceTagsJson = reader.GetString(14);
-            string tagsJson = reader.GetString(15);
-            string logsJson = reader.GetString(16);
 
-            Assert.Equal(sessionId, rowSessionId);
-            Assert.NotEqual(Guid.Empty, rowPairId);
-            Assert.True(startTimeUtc > DateTime.UnixEpoch);
-            Assert.False(string.IsNullOrWhiteSpace(originKind));
-            Assert.Equal(expectedProtocol, protocol);
-            Assert.True(TraceId.TryParse(traceId, out var parsedTrace) && parsedTrace.Value == traceId);
-            Assert.True(SpanId.TryParse(spanId, out var parsedSpan) && parsedSpan.Value == spanId);
-            if (!string.IsNullOrEmpty(parentSpanId))
-            {
-                Assert.True(SpanId.TryParse(parentSpanId, out var parsedParent) && parsedParent.Value == parentSpanId);
-            }
-
-            Assert.False(string.IsNullOrWhiteSpace(operationName));
-            Assert.False(string.IsNullOrWhiteSpace(serviceName));
             Assert.True(double.IsFinite(startTimeMs) && startTimeMs > 0.0);
             Assert.True(double.IsFinite(durationMs) && durationMs >= 0.0);
             Assert.Contains(statusCode, new[] { 0, 1, 2 });
             Assert.NotNull(statusMessage);
 
-            AssertServiceTagsJson(serviceTagsJson);
-            AssertJsonArray(tagsJson);
-            AssertJsonArray(logsJson);
+            AssertServiceTagsJson(reader.GetString(14));
+            AssertJsonArray(reader.GetString(15));
+            AssertJsonArray(reader.GetString(16));
 
             traces.Add(new VerifiedGrafanaTraceRow(
-                rowSessionId,
-                rowPairId,
-                startTimeUtc,
-                originKind,
-                protocol,
                 traceId,
                 spanId,
                 parentSpanId,
-                operationName,
-                serviceName,
-                startTimeMs,
-                durationMs,
+                expectedProtocol,
                 statusCode,
                 statusMessage));
         }
@@ -263,10 +235,8 @@ internal static class GrafanaViewsVerifier
         while (await reader.ReadAsync(ct))
         {
             rowCount++;
-            string syntheticTraceId = reader.GetString(0);
-            string spanId = reader.GetString(1);
-            Assert.True(TraceId.TryParse(syntheticTraceId, out var parsedSynthetic) && parsedSynthetic.Value == syntheticTraceId);
-            Assert.True(SpanId.TryParse(spanId, out _));
+            AssertCanonicalTraceId(reader.GetString(0));
+            AssertCanonicalSpanId(reader.GetString(1));
         }
 
         Assert.Equal(Math.Min(expectedSpanCount, 250L), rowCount);
@@ -322,7 +292,8 @@ internal static class GrafanaViewsVerifier
     private static async Task<List<VerifiedNodeGraphEdge>> QueryAndAssertEdgesViewAsync(
         NpgsqlConnection conn,
         Guid sessionId,
-        string expectedProtocol,
+        ProtocolType expectedProtocol,
+        string expectedWireProtocol,
         int expectedEdgeCount,
         IReadOnlyList<VerifiedNodeGraphNode> nodes,
         CancellationToken ct)
@@ -349,20 +320,20 @@ internal static class GrafanaViewsVerifier
             string target = reader.GetString(2);
             string mainStat = reader.GetString(3);
             string secondaryStat = reader.GetString(4);
-            string detailProtocol = reader.GetString(5);
+            string detailProtocolWire = reader.GetString(5);
             long spanCount = reader.GetInt64(6);
             long errorCount = reader.GetInt64(7);
             double avgDurationMs = reader.GetDouble(8);
             double p95DurationMs = reader.GetDouble(9);
 
             Assert.True(seenEdgeIds.Add(id), $"Duplicate edge id '{id}'.");
-            Assert.Equal($"{source}->{target}:{detailProtocol}", id);
+            Assert.Equal($"{source}->{target}:{detailProtocolWire}", id);
             Assert.Contains(source, nodeIds);
             Assert.Contains(target, nodeIds);
             Assert.Contains("spans", mainStat, StringComparison.Ordinal);
             Assert.Contains("ms", mainStat, StringComparison.Ordinal);
             Assert.Contains("% err", secondaryStat, StringComparison.Ordinal);
-            Assert.Equal(expectedProtocol, detailProtocol);
+            Assert.Equal(expectedWireProtocol, detailProtocolWire);
             Assert.True(spanCount > 0);
             Assert.True(errorCount >= 0 && errorCount <= spanCount);
             Assert.True(double.IsFinite(avgDurationMs) && avgDurationMs >= 0.0);
@@ -374,7 +345,7 @@ internal static class GrafanaViewsVerifier
                 target,
                 mainStat,
                 secondaryStat,
-                detailProtocol,
+                expectedProtocol,
                 spanCount,
                 errorCount,
                 avgDurationMs,
@@ -384,6 +355,25 @@ internal static class GrafanaViewsVerifier
         Assert.Equal(expectedEdgeCount, edges.Count);
         return edges;
     }
+
+    private static TraceId AssertCanonicalTraceId(string raw)
+    {
+        Assert.True(TraceId.TryParse(raw, out var parsed) && parsed.Value == raw, $"Invalid canonical TraceId '{raw}'.");
+        return parsed;
+    }
+
+    private static SpanId AssertCanonicalSpanId(string raw)
+    {
+        Assert.True(SpanId.TryParse(raw, out var parsed) && parsed.Value == raw, $"Invalid canonical SpanId '{raw}'.");
+        return parsed;
+    }
+
+    private static string ToWireProtocol(ProtocolType protocol) => protocol switch
+    {
+        ProtocolType.ModbusTcp => "ModbusTCP",
+        ProtocolType.Dnp3 => "DNP3",
+        _ => throw new ArgumentOutOfRangeException(nameof(protocol), protocol, "Unsupported protocol.")
+    };
 
     private static void AssertServiceTagsJson(string json)
     {

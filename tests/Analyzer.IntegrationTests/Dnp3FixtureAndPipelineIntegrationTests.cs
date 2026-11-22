@@ -16,6 +16,7 @@ using Npgsql;
 
 namespace Analyzer.IntegrationTests;
 
+[Collection(TimescaleDbCollection.Name)]
 public class Dnp3FixtureAndPipelineIntegrationTests : IAsyncLifetime
 {
     private readonly IntegrationTestConfig _config = IntegrationTestConfig.Load();
@@ -471,7 +472,7 @@ public class Dnp3FixtureAndPipelineIntegrationTests : IAsyncLifetime
             conn,
             summary.SessionId,
             expectedSpanCount: summary.TraceSpansPersisted,
-            expectedProtocol: "DNP3",
+            expectedProtocol: ProtocolType.Dnp3,
             expectedNodeCount: 2,
             expectedEdgeCount: 1);
 

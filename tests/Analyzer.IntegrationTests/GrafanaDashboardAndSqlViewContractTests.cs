@@ -6,14 +6,10 @@ namespace Analyzer.IntegrationTests;
 
 public class GrafanaDashboardAndSqlViewContractTests
 {
-    private static string GetRepoRoot() =>
-        IntegrationTestConfig.FindRepoRoot(AppContext.BaseDirectory)
-        ?? throw new InvalidOperationException("Could not locate repository root.");
-
     [Fact]
     public void TraceSpansMigrationSql_DefinesAllThreeGrafanaViewsIdempotently()
     {
-        var sqlPath = Path.Combine(GetRepoRoot(), "docker", "sql", "002_add_trace_spans.sql");
+        var sqlPath = Path.Combine(IntegrationTestConfig.FindRepoRootOrThrow(), "docker", "sql", "002_add_trace_spans.sql");
         Assert.True(File.Exists(sqlPath), $"Expected migration SQL file at '{sqlPath}'.");
 
         string sql = File.ReadAllText(sqlPath);
@@ -22,7 +18,6 @@ public class GrafanaDashboardAndSqlViewContractTests
         Assert.Matches(new Regex(@"CREATE\s+OR\s+REPLACE\s+VIEW\s+v_grafana_node_graph_nodes\b", RegexOptions.IgnoreCase), sql);
         Assert.Matches(new Regex(@"CREATE\s+OR\s+REPLACE\s+VIEW\s+v_grafana_node_graph_edges\b", RegexOptions.IgnoreCase), sql);
 
-        // v_grafana_traces contract columns
         string[] traceColumns =
         [
             "session_id",
@@ -49,7 +44,6 @@ public class GrafanaDashboardAndSqlViewContractTests
             Assert.Contains(column, sql, StringComparison.Ordinal);
         }
 
-        // v_grafana_node_graph_nodes contract columns
         string[] nodeColumns =
         [
             "\"subTitle\"",
@@ -64,7 +58,6 @@ public class GrafanaDashboardAndSqlViewContractTests
             Assert.Contains(column, sql, StringComparison.Ordinal);
         }
 
-        // v_grafana_node_graph_edges contract columns & SERVER_TO_CLIENT routing
         string[] edgeColumns =
         [
             "detail__protocol",
@@ -85,7 +78,7 @@ public class GrafanaDashboardAndSqlViewContractTests
     public void TraceTopologyDashboard_IsValidJsonWithExpectedUidVariablesPanelsAndDataLinks()
     {
         var dashboardPath = Path.Combine(
-            GetRepoRoot(),
+            IntegrationTestConfig.FindRepoRootOrThrow(),
             "docker",
             "grafana",
             "dashboards",
@@ -101,8 +94,7 @@ public class GrafanaDashboardAndSqlViewContractTests
 
         var variables = root.GetProperty("templating").GetProperty("list").EnumerateArray().ToList();
         var variableNames = variables.Select(v => v.GetProperty("name").GetString()).ToHashSet(StringComparer.Ordinal);
-        string[] expectedVars = ["session", "device_pair", "protocol", "status", "trace_id", "window_bucket"];
-        foreach (string expectedVar in expectedVars)
+        foreach (string expectedVar in new[] { "session", "device_pair", "protocol", "status", "trace_id", "window_bucket" })
         {
             Assert.Contains(expectedVar, variableNames);
         }
@@ -141,7 +133,7 @@ public class GrafanaDashboardAndSqlViewContractTests
         Assert.Contains("$protocol", explorerSql, StringComparison.Ordinal);
         Assert.Contains("$status", explorerSql, StringComparison.Ordinal);
         Assert.Contains("$__timeFilter", explorerSql, StringComparison.Ordinal);
-        AssertDataLinkOnTraceId(explorerPanel, expectedUrlPrefix: "/d/industrial-protocol-traces", requireSessionVar: true);
+        AssertDataLinkOnTraceId(explorerPanel, "/d/industrial-protocol-traces");
 
         // 3. Trace Waterfall panel (12 Grafana Traces columns)
         var traceWaterfallPanel = Assert.Single(topLevelPanels, p => p.GetProperty("type").GetString() == "traces");
@@ -169,31 +161,19 @@ public class GrafanaDashboardAndSqlViewContractTests
         Assert.Contains("time_bucket(INTERVAL '$window_bucket', start_time_utc)", timeWindowSql, StringComparison.Ordinal);
         Assert.Contains("AS \"traceID\"", timeWindowSql, StringComparison.Ordinal);
 
-        // 5. Correlated Telemetry & Commands detail tables
-        var tagValuesPanel = Assert.Single(
+        // 5. Correlated Telemetry & Captured Command Events detail tables
+        AssertCorrelatedDetailTablePanel(topLevelPanels, "Correlated Telemetry (tag_values)", "FROM tag_values");
+        AssertCorrelatedDetailTablePanel(
             topLevelPanels,
-            p => p.GetProperty("type").GetString() == "table" &&
-                 p.GetProperty("title").GetString() == "Correlated Telemetry (tag_values)");
-        string tagValuesSql = tagValuesPanel.GetProperty("targets")[0].GetProperty("rawSql").GetString()!;
-        Assert.Contains("FROM tag_values", tagValuesSql, StringComparison.Ordinal);
-        Assert.Contains("$session", tagValuesSql, StringComparison.Ordinal);
-        Assert.Contains("$trace_id", tagValuesSql, StringComparison.Ordinal);
-
-        var commandsPanel = Assert.Single(
-            topLevelPanels,
-            p => p.GetProperty("type").GetString() == "table" &&
-                 p.GetProperty("title").GetString() == "Correlated Control Commands (captured_command_events)");
-        string commandsSql = commandsPanel.GetProperty("targets")[0].GetProperty("rawSql").GetString()!;
-        Assert.Contains("FROM captured_command_events", commandsSql, StringComparison.Ordinal);
-        Assert.Contains("$session", commandsSql, StringComparison.Ordinal);
-        Assert.Contains("$trace_id", commandsSql, StringComparison.Ordinal);
+            "Correlated Captured Command Events (captured_command_events)",
+            "FROM captured_command_events");
     }
 
     [Fact]
     public void AnalyzerDashboard_ProjectsTraceIdAndWiresDataLinksToTraceExplorer()
     {
         var dashboardPath = Path.Combine(
-            GetRepoRoot(),
+            IntegrationTestConfig.FindRepoRootOrThrow(),
             "docker",
             "grafana",
             "dashboards",
@@ -204,8 +184,7 @@ public class GrafanaDashboardAndSqlViewContractTests
         using var doc = JsonDocument.Parse(File.ReadAllText(dashboardPath));
         var panels = doc.RootElement.GetProperty("panels").EnumerateArray().ToList();
 
-        int[] targetPanelIds = [18, 23, 29];
-        foreach (int panelId in targetPanelIds)
+        foreach (int panelId in new[] { 18, 23, 29 })
         {
             var panel = Assert.Single(panels, p => p.GetProperty("id").GetInt32() == panelId);
             Assert.Equal("table", panel.GetProperty("type").GetString());
@@ -215,12 +194,26 @@ public class GrafanaDashboardAndSqlViewContractTests
 
             AssertDataLinkOnTraceId(
                 panel,
-                expectedUrlPrefix: "/d/industrial-protocol-traces?var-session=${session}&var-trace_id=${__data.fields.trace_id}&from=${__from}&to=${__to}",
-                requireSessionVar: true);
+                "/d/industrial-protocol-traces?var-session=${session}&var-trace_id=${__data.fields.trace_id}&from=${__from}&to=${__to}");
         }
     }
 
-    private static void AssertDataLinkOnTraceId(JsonElement panel, string expectedUrlPrefix, bool requireSessionVar)
+    private static void AssertCorrelatedDetailTablePanel(
+        IReadOnlyList<JsonElement> panels,
+        string expectedTitle,
+        string expectedFromClause)
+    {
+        var panel = Assert.Single(
+            panels,
+            p => p.GetProperty("type").GetString() == "table" &&
+                 p.GetProperty("title").GetString() == expectedTitle);
+        string sql = panel.GetProperty("targets")[0].GetProperty("rawSql").GetString()!;
+        Assert.Contains(expectedFromClause, sql, StringComparison.Ordinal);
+        Assert.Contains("$session", sql, StringComparison.Ordinal);
+        Assert.Contains("$trace_id", sql, StringComparison.Ordinal);
+    }
+
+    private static void AssertDataLinkOnTraceId(JsonElement panel, string expectedUrlPrefix)
     {
         var overrides = panel.GetProperty("fieldConfig").GetProperty("overrides").EnumerateArray().ToList();
         var traceIdOverride = Assert.Single(
@@ -236,9 +229,6 @@ public class GrafanaDashboardAndSqlViewContractTests
         string url = link.GetProperty("url").GetString()!;
         Assert.StartsWith(expectedUrlPrefix, url, StringComparison.Ordinal);
         Assert.Contains("var-trace_id=${__data.fields.trace_id}", url, StringComparison.Ordinal);
-        if (requireSessionVar)
-        {
-            Assert.Contains("var-session=${session}", url, StringComparison.Ordinal);
-        }
+        Assert.Contains("var-session=${session}", url, StringComparison.Ordinal);
     }
 }

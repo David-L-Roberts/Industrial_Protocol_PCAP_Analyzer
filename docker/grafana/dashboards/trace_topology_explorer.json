@@ -124,7 +124,7 @@
                   {
                     "targetBlank": false,
                     "title": "Inspect Trace Waterfall",
-                    "url": "/d/industrial-protocol-traces?var-session=${session}&var-trace_id=${__data.fields.trace_id}&from=${__from}&to=${__to}"
+                    "url": "/d/industrial-protocol-traces?var-session=${session}&var-device_pair=${device_pair}&var-protocol=${protocol}&var-status=${status}&var-trace_id=${__data.fields.trace_id}&var-window_bucket=${window_bucket}&from=${__from}&to=${__to}"
                   }
                 ]
               }
@@ -271,7 +271,7 @@
           "refId": "A"
         }
       ],
-      "title": "Correlated Control Commands (captured_command_events)",
+      "title": "Correlated Captured Command Events (captured_command_events)",
       "type": "table"
     },
     {

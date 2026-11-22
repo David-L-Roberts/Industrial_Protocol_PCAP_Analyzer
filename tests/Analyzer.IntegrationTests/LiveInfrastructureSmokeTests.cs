@@ -3,12 +3,14 @@ using Analyzer.Infrastructure.Dissection;
 using Analyzer.Infrastructure.Storage;
 using Analyzer.IntegrationTests.Attributes;
 using Analyzer.IntegrationTests.Configuration;
+using Analyzer.IntegrationTests.Persistence;
 using Minio;
 using Minio.DataModel.Args;
 using Npgsql;
 
 namespace Analyzer.IntegrationTests;
 
+[Collection(TimescaleDbCollection.Name)]
 [IntegrationTrait]
 public class LiveInfrastructureSmokeTests
 {

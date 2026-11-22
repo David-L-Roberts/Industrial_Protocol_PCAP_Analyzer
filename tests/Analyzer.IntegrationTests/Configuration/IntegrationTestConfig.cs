@@ -91,6 +91,10 @@ public sealed record IntegrationTestConfig(
         return null;
     }
 
+    public static string FindRepoRootOrThrow(string? startDirectory = null) =>
+        FindRepoRoot(startDirectory ?? AppContext.BaseDirectory)
+        ?? throw new InvalidOperationException("Could not locate repository root.");
+
     private static void LoadEnvFileInto(string filePath, Dictionary<string, string> target)
     {
         foreach (var rawLine in File.ReadLines(filePath))

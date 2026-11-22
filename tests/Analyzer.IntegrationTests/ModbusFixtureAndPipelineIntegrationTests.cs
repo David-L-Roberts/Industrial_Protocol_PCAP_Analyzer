@@ -16,6 +16,7 @@ using Npgsql;
 
 namespace Analyzer.IntegrationTests;
 
+[Collection(TimescaleDbCollection.Name)]
 public class ModbusFixtureAndPipelineIntegrationTests : IAsyncLifetime
 {
     private readonly IntegrationTestConfig _config = IntegrationTestConfig.Load();
@@ -336,7 +337,7 @@ public class ModbusFixtureAndPipelineIntegrationTests : IAsyncLifetime
             conn,
             summary.SessionId,
             expectedSpanCount: summary.TraceSpansPersisted,
-            expectedProtocol: "ModbusTCP",
+            expectedProtocol: ProtocolType.ModbusTcp,
             expectedNodeCount: 3,
             expectedEdgeCount: 2);
 
