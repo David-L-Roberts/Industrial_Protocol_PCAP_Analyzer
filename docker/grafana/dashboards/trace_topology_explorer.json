@@ -1,0 +1,460 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "Device Communication Topology",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "datasource", "uid": "grafana" },
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 1 },
+      "id": 2,
+      "options": {
+        "code": { "language": "plaintext", "showLineNumbers": false, "showMiniMap": false },
+        "content": "### Industrial Protocol Trace & Topology Explorer\nSelect a **$session** above to view live device-to-device topology (`v_grafana_node_graph_nodes` / `v_grafana_node_graph_edges`) and inspect Tempo-style span waterfalls (`v_grafana_traces`).\n> **Virtual-Clock Note:** Adjust Grafana's time range picker to match the PCAP capture timestamps, then click any `trace_id` in the **Trace & Span Explorer** table (or drill down from the main Analyzer dashboard) to load its full span waterfall, attributes, timeline logs, and correlated `tag_values` / `captured_command_events`.",
+        "mode": "markdown"
+      },
+      "pluginVersion": "10.0.0",
+      "title": "Trace & Topology Navigation Guide",
+      "type": "text"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "arc__success" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "arc__error" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 4 },
+      "id": 3,
+      "options": {
+        "edges": {
+          "mainStatUnit": "none"
+        },
+        "nodes": {
+          "arcs": [
+            { "color": "green", "field": "arc__success" },
+            { "color": "red", "field": "arc__error" }
+          ],
+          "mainStatUnit": "short",
+          "secondaryStatUnit": "ms"
+        },
+        "zoomMode": "cooperative"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  id,\n  title,\n  \"subTitle\",\n  \"mainStat\",\n  \"secondaryStat\",\n  arc__success,\n  arc__error\nFROM v_grafana_node_graph_nodes\nWHERE session_id = '$session';",
+          "refId": "nodes"
+        },
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  id,\n  source,\n  target,\n  \"mainStat\",\n  \"secondaryStat\",\n  detail__protocol,\n  detail__span_count,\n  detail__error_count,\n  detail__avg_duration_ms,\n  detail__p95_duration_ms\nFROM v_grafana_node_graph_edges\nWHERE session_id = '$session';",
+          "refId": "edges"
+        }
+      ],
+      "title": "Device Communication Topology",
+      "type": "nodeGraph"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 },
+      "id": 4,
+      "title": "Trace & Span Explorer",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": { "align": "auto", "displayMode": "auto", "filterable": true, "inspect": true },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "trace_id" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Inspect Trace Waterfall",
+                    "url": "/d/industrial-protocol-traces?var-session=${session}&var-trace_id=${__data.fields.trace_id}&from=${__from}&to=${__to}"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Status" },
+            "properties": [
+              { "id": "custom.displayMode", "value": "color-text" },
+              {
+                "id": "mappings",
+                "value": [
+                  { "options": { "OK": { "color": "green", "index": 0 } }, "type": "value" },
+                  { "options": { "ERROR": { "color": "red", "index": 1 } }, "type": "value" },
+                  { "options": { "UNSET": { "color": "orange", "index": 2 } }, "type": "value" }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Duration (ms)" },
+            "properties": [
+              { "id": "unit", "value": "ms" }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 15 },
+      "id": 5,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": true, "fields": "", "reducer": ["sum"], "show": true },
+        "showHeader": true,
+        "sortBy": [{ "desc": true, "displayName": "Start Time" }]
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "WITH filtered_spans AS (\n  SELECT\n    s.session_id,\n    s.device_pair_id,\n    s.start_time,\n    s.trace_id,\n    s.span_id,\n    s.parent_span_id,\n    s.service_name,\n    s.operation_name,\n    s.origin_kind,\n    s.status_code,\n    s.status_message,\n    s.duration_ms,\n    s.protocol,\n    s.request_frame_number,\n    s.response_frame_number\n  FROM trace_spans s\n  WHERE s.session_id = '$session'\n    AND s.device_pair_id IN ($device_pair)\n    AND s.protocol IN ($protocol)\n    AND s.status_code IN ($status)\n    AND $__timeFilter(s.start_time)\n),\ntrace_counts AS (\n  SELECT\n    trace_id,\n    COUNT(*)::bigint AS span_count\n  FROM trace_spans\n  WHERE session_id = '$session'\n  GROUP BY trace_id\n),\nranked_traces AS (\n  SELECT\n    f.*,\n    tc.span_count,\n    ROW_NUMBER() OVER (\n      PARTITION BY f.trace_id\n      ORDER BY (f.parent_span_id IS NOT NULL) ASC, f.start_time ASC, f.span_id ASC\n    ) AS rn\n  FROM filtered_spans f\n  JOIN trace_counts tc ON tc.trace_id = f.trace_id\n)\nSELECT\n  to_char(r.start_time, 'YYYY-MM-DD HH24:MI:SS.MS') AS \"Start Time\",\n  r.trace_id AS \"trace_id\",\n  r.protocol AS \"Protocol\",\n  dp.name AS \"Device Pair\",\n  r.service_name AS \"Service\",\n  r.operation_name AS \"Operation\",\n  r.origin_kind AS \"Origin\",\n  r.status_code AS \"Status\",\n  COALESCE(r.status_message, '') AS \"Status Message\",\n  ROUND(r.duration_ms::numeric, 2) AS \"Duration (ms)\",\n  r.span_count AS \"Spans\",\n  r.request_frame_number AS \"Req Frame\",\n  r.response_frame_number AS \"Resp Frame\"\nFROM ranked_traces r\nJOIN device_pairs dp ON dp.id = r.device_pair_id\nWHERE r.rn = 1\nORDER BY r.start_time DESC\nLIMIT 200;",
+          "refId": "A"
+        }
+      ],
+      "title": "Trace & Span Explorer",
+      "type": "table"
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 24 },
+      "id": 6,
+      "title": "Trace Waterfall & Correlated Details",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 25 },
+      "id": 7,
+      "options": {
+        "createSpanLink": false,
+        "nodeGraph": { "enabled": false },
+        "spanBar": { "type": "Duration" }
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  \"traceID\",\n  \"spanID\",\n  \"parentSpanID\",\n  \"operationName\",\n  \"serviceName\",\n  \"startTime\",\n  \"duration\",\n  \"statusCode\",\n  \"statusMessage\",\n  \"serviceTags\",\n  \"tags\",\n  \"logs\"\nFROM v_grafana_traces\nWHERE session_id = '$session'\n  AND \"traceID\" = COALESCE(\n    NULLIF(TRIM('$trace_id'), ''),\n    (SELECT trace_id FROM trace_spans WHERE session_id = '$session' ORDER BY start_time DESC LIMIT 1)\n  )\nORDER BY \"startTime\" ASC;",
+          "refId": "A"
+        }
+      ],
+      "title": "Trace Waterfall",
+      "type": "traces"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": { "align": "auto", "displayMode": "auto", "filterable": true, "inspect": true },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 37 },
+      "id": 8,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": true, "fields": "", "reducer": ["sum"], "show": true },
+        "showHeader": true,
+        "sortBy": [{ "desc": false, "displayName": "Frame #" }]
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  tv.frame_number AS \"Frame #\",\n  to_char(tv.packet_timestamp, 'YYYY-MM-DD HH24:MI:SS.MS') AS \"Packet Time\",\n  to_char(tv.event_timestamp, 'HH24:MI:SS.MS') AS \"RTU Event Time\",\n  td.tag_name AS \"Tag Name\",\n  td.protocol_address AS \"Address\",\n  COALESCE(tv.scaled_numeric_value::text, tv.boolean_value::text, tv.raw_hex) AS \"Value\",\n  td.engineering_units AS \"Units\",\n  COALESCE(tv.quality_flags, 'NORMAL') AS \"Quality Flags\",\n  tv.is_value_change AS \"Changed\",\n  tv.span_id AS \"Span ID\"\nFROM tag_values tv\nJOIN tag_definitions td ON tv.tag_id = td.id\nWHERE tv.session_id = '$session'\n  AND tv.trace_id = COALESCE(\n    NULLIF(TRIM('$trace_id'), ''),\n    (SELECT trace_id FROM trace_spans WHERE session_id = '$session' ORDER BY start_time DESC LIMIT 1)\n  )\nORDER BY tv.packet_timestamp ASC, tv.frame_number ASC\nLIMIT 250;",
+          "refId": "A"
+        }
+      ],
+      "title": "Correlated Telemetry (tag_values)",
+      "type": "table"
+    },
+    {
+      "datasource": { "type": "postgres", "uid": "timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": { "align": "auto", "displayMode": "auto", "filterable": true, "inspect": true },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 37 },
+      "id": 9,
+      "options": {
+        "cellHeight": "sm",
+        "footer": { "countRows": true, "fields": "", "reducer": ["sum"], "show": true },
+        "showHeader": true,
+        "sortBy": [{ "desc": false, "displayName": "Frame #" }]
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "editorMode": "code",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT\n  c.frame_number AS \"Frame #\",\n  to_char(c.timestamp, 'YYYY-MM-DD HH24:MI:SS.MS') AS \"Timestamp\",\n  dp.name AS \"Device Pair\",\n  c.protocol AS \"Protocol\",\n  c.command_type AS \"Command Type\",\n  c.target_address AS \"Target Address\",\n  COALESCE(c.control_action, '-') AS \"Action\",\n  c.command_count AS \"Count\",\n  c.pulse_on_ms AS \"Pulse On (ms)\",\n  c.pulse_off_ms AS \"Pulse Off (ms)\",\n  c.unscaled_command_value AS \"Value\",\n  '0x' || encode(c.raw_pdu_bytes, 'hex') AS \"Raw PDU Hex\",\n  c.span_id AS \"Span ID\"\nFROM captured_command_events c\nJOIN device_pairs dp ON c.device_pair_id = dp.id\nWHERE c.session_id = '$session'\n  AND c.trace_id = COALESCE(\n    NULLIF(TRIM('$trace_id'), ''),\n    (SELECT trace_id FROM trace_spans WHERE session_id = '$session' ORDER BY start_time DESC LIMIT 1)\n  )\nORDER BY c.timestamp ASC, c.frame_number ASC\nLIMIT 250;",
+          "refId": "A"
+        }
+      ],
+      "title": "Correlated Control Commands (captured_command_events)",
+      "type": "table"
+    },
+    {
+      "collapsed": true,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 45 },
+      "id": 10,
+      "panels": [
+        {
+          "datasource": { "type": "postgres", "uid": "timescaledb" },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "gridPos": { "h": 12, "w": 24, "x": 0, "y": 46 },
+          "id": 11,
+          "options": {
+            "createSpanLink": false,
+            "nodeGraph": { "enabled": false },
+            "spanBar": { "type": "Duration" }
+          },
+          "pluginVersion": "10.0.0",
+          "targets": [
+            {
+              "datasource": { "type": "postgres", "uid": "timescaledb" },
+              "editorMode": "code",
+              "format": "table",
+              "rawQuery": true,
+              "rawSql": "SELECT\n  md5(session_id::text || ':' || time_bucket(INTERVAL '$window_bucket', start_time_utc)::text) AS \"traceID\",\n  \"spanID\",\n  \"parentSpanID\",\n  \"operationName\",\n  \"serviceName\",\n  \"startTime\",\n  \"duration\",\n  \"statusCode\",\n  \"statusMessage\",\n  \"serviceTags\",\n  \"tags\",\n  \"logs\"\nFROM v_grafana_traces\nWHERE session_id = '$session'\n  AND device_pair_id IN ($device_pair)\n  AND protocol IN ($protocol)\n  AND $__timeFilter(start_time_utc)\nORDER BY \"startTime\" ASC\nLIMIT 250;",
+              "refId": "A"
+            }
+          ],
+          "title": "Time-Window Capture Waterfall (Concurrent Spans)",
+          "type": "traces"
+        }
+      ],
+      "title": "Time-Window Capture Waterfall",
+      "type": "row"
+    }
+  ],
+  "refresh": "",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["ics", "scada", "pcap", "modbus", "dnp3", "timescaledb", "traces", "topology"],
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "timescaledb"
+        },
+        "definition": "SELECT id::text AS __value, name || ' (' || pcap_file_name || ' [' || status || '])' AS __text FROM test_sessions ORDER BY ingested_at DESC;",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Test Session",
+        "multi": false,
+        "name": "session",
+        "options": [],
+        "query": "SELECT id::text AS __value, name || ' (' || pcap_file_name || ' [' || status || '])' AS __text FROM test_sessions ORDER BY ingested_at DESC;",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": ["All"],
+          "value": ["$__all"]
+        },
+        "datasource": {
+          "type": "postgres",
+          "uid": "timescaledb"
+        },
+        "definition": "SELECT id::text AS __value, name || ' [' || protocol || '] (' || COALESCE(client_name, host(client_ip)) || ' -> ' || COALESCE(server_name, host(server_ip)) || ')' AS __text FROM device_pairs WHERE session_id = '$session' ORDER BY name;",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Device Pair",
+        "multi": true,
+        "name": "device_pair",
+        "options": [],
+        "query": "SELECT id::text AS __value, name || ' [' || protocol || '] (' || COALESCE(client_name, host(client_ip)) || ' -> ' || COALESCE(server_name, host(server_ip)) || ')' AS __text FROM device_pairs WHERE session_id = '$session' ORDER BY name;",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": ["All"],
+          "value": ["$__all"]
+        },
+        "hide": 0,
+        "includeAll": true,
+        "label": "Protocol",
+        "multi": true,
+        "name": "protocol",
+        "options": [
+          { "selected": true, "text": "All", "value": "$__all" },
+          { "selected": false, "text": "ModbusTCP", "value": "ModbusTCP" },
+          { "selected": false, "text": "DNP3", "value": "DNP3" }
+        ],
+        "query": "ModbusTCP, DNP3",
+        "skipUrlSync": false,
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": ["All"],
+          "value": ["$__all"]
+        },
+        "hide": 0,
+        "includeAll": true,
+        "label": "Span Status",
+        "multi": true,
+        "name": "status",
+        "options": [
+          { "selected": true, "text": "All", "value": "$__all" },
+          { "selected": false, "text": "OK", "value": "OK" },
+          { "selected": false, "text": "ERROR", "value": "ERROR" },
+          { "selected": false, "text": "UNSET", "value": "UNSET" }
+        ],
+        "query": "OK, ERROR, UNSET",
+        "skipUrlSync": false,
+        "type": "custom"
+      },
+      {
+        "current": {
+          "selected": false,
+          "text": "",
+          "value": ""
+        },
+        "hide": 0,
+        "label": "Trace ID",
+        "name": "trace_id",
+        "options": [
+          { "selected": true, "text": "", "value": "" }
+        ],
+        "query": "",
+        "skipUrlSync": false,
+        "type": "textbox"
+      },
+      {
+        "current": {
+          "selected": true,
+          "text": "5s",
+          "value": "5s"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Window Bucket",
+        "multi": false,
+        "name": "window_bucket",
+        "options": [
+          { "selected": false, "text": "1s", "value": "1s" },
+          { "selected": true, "text": "5s", "value": "5s" },
+          { "selected": false, "text": "10s", "value": "10s" },
+          { "selected": false, "text": "30s", "value": "30s" }
+        ],
+        "query": "1s, 5s, 10s, 30s",
+        "skipUrlSync": false,
+        "type": "custom"
+      }
+    ]
+  },
+  "time": {
+    "from": "now-2d",
+    "to": "now"
+  },
+  "timepicker": {
+    "refresh_intervals": ["5s", "10s", "30s", "1m", "5m", "15m", "30m", "1h", "2h", "1d"]
+  },
+  "timezone": "browser",
+  "title": "Industrial Protocol Trace & Topology Explorer",
+  "uid": "industrial-protocol-traces",
+  "version": 1,
+  "weekStart": ""
+}

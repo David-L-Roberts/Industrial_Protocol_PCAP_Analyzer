@@ -86,3 +86,125 @@ CREATE INDEX IF NOT EXISTS idx_trace_spans_session_errors
 
 CREATE INDEX IF NOT EXISTS idx_trace_spans_device_pair
     ON trace_spans (device_pair_id, start_time DESC);
+
+-- 5. Grafana Traces & Node Graph SQL Views
+CREATE OR REPLACE VIEW v_grafana_traces AS
+SELECT
+    s.session_id,
+    s.device_pair_id,
+    s.start_time AS start_time_utc,
+    s.origin_kind,
+    s.protocol,
+    s.trace_id AS "traceID",
+    s.span_id AS "spanID",
+    COALESCE(s.parent_span_id, '') AS "parentSpanID",
+    s.operation_name AS "operationName",
+    s.service_name AS "serviceName",
+    (EXTRACT(EPOCH FROM s.start_time) * 1000.0)::double precision AS "startTime",
+    s.duration_ms AS "duration",
+    CASE s.status_code
+        WHEN 'OK' THEN 1
+        WHEN 'ERROR' THEN 2
+        ELSE 0
+    END AS "statusCode",
+    COALESCE(s.status_message, '') AS "statusMessage",
+    jsonb_build_array(
+        jsonb_build_object('key', 'protocol', 'value', s.protocol),
+        jsonb_build_object('key', 'device.pair.name', 'value', dp.name),
+        jsonb_build_object('key', 'endpoint.client', 'value', s.client_endpoint),
+        jsonb_build_object('key', 'endpoint.server', 'value', s.server_endpoint),
+        jsonb_build_object('key', 'span.kind', 'value', s.span_kind),
+        jsonb_build_object('key', 'span.origin_kind', 'value', s.origin_kind)
+    ) AS "serviceTags",
+    COALESCE(
+        (
+            SELECT jsonb_agg(jsonb_build_object('key', kv.key, 'value', kv.value) ORDER BY kv.key)
+            FROM jsonb_each(s.attributes) AS kv(key, value)
+        ),
+        '[]'::jsonb
+    ) AS "tags",
+    s.events AS "logs"
+FROM trace_spans s
+JOIN device_pairs dp ON dp.id = s.device_pair_id;
+
+CREATE OR REPLACE VIEW v_grafana_node_graph_nodes AS
+WITH node_spans AS (
+    SELECT
+        s.session_id,
+        ep.node_id,
+        ep.node_ip,
+        s.protocol,
+        s.duration_ms,
+        ep.is_target,
+        (s.status_code = 'ERROR') AS is_error
+    FROM trace_spans s
+    JOIN device_pairs dp ON dp.id = s.device_pair_id
+    CROSS JOIN LATERAL (
+        SELECT
+            s.client_endpoint AS node_id,
+            host(dp.client_ip) AS node_ip,
+            (s.direction = 'SERVER_TO_CLIENT' OR s.client_endpoint = s.server_endpoint) AS is_target
+        UNION ALL
+        SELECT
+            s.server_endpoint AS node_id,
+            host(dp.server_ip) AS node_ip,
+            (s.direction <> 'SERVER_TO_CLIENT') AS is_target
+        WHERE s.server_endpoint <> s.client_endpoint
+    ) ep
+)
+SELECT
+    session_id,
+    node_id AS id,
+    node_id AS title,
+    string_agg(DISTINCT node_ip, ', ' ORDER BY node_ip)
+        || ' (' || string_agg(DISTINCT protocol, ', ' ORDER BY protocol) || ')' AS "subTitle",
+    COUNT(*)::bigint AS "mainStat",
+    ROUND(COALESCE(AVG(duration_ms) FILTER (WHERE is_target), 0.0)::numeric, 2)::double precision AS "secondaryStat",
+    (COUNT(*) FILTER (WHERE NOT is_error)::double precision / NULLIF(COUNT(*), 0)::double precision) AS arc__success,
+    (COUNT(*) FILTER (WHERE is_error)::double precision / NULLIF(COUNT(*), 0)::double precision) AS arc__error
+FROM node_spans
+GROUP BY session_id, node_id;
+
+CREATE OR REPLACE VIEW v_grafana_node_graph_edges AS
+WITH directed_spans AS (
+    SELECT
+        s.session_id,
+        CASE
+            WHEN s.direction = 'SERVER_TO_CLIENT' THEN s.server_endpoint
+            ELSE s.client_endpoint
+        END AS source,
+        CASE
+            WHEN s.direction = 'SERVER_TO_CLIENT' THEN s.client_endpoint
+            ELSE s.server_endpoint
+        END AS target,
+        s.protocol,
+        s.duration_ms,
+        (s.status_code = 'ERROR') AS is_error
+    FROM trace_spans s
+),
+edge_stats AS (
+    SELECT
+        session_id,
+        source,
+        target,
+        protocol,
+        COUNT(*)::bigint AS span_count,
+        COUNT(*) FILTER (WHERE is_error)::bigint AS error_count,
+        ROUND(AVG(duration_ms)::numeric, 2)::double precision AS avg_duration_ms,
+        ROUND((percentile_cont(0.95) WITHIN GROUP (ORDER BY duration_ms))::numeric, 2)::double precision AS p95_duration_ms
+    FROM directed_spans
+    GROUP BY session_id, source, target, protocol
+)
+SELECT
+    session_id,
+    source || '->' || target || ':' || protocol AS id,
+    source,
+    target,
+    span_count::text || ' spans / ' || ROUND(avg_duration_ms::numeric, 2)::text || ' ms' AS "mainStat",
+    ROUND((error_count * 100.0 / NULLIF(span_count, 0))::numeric, 1)::text || '% err (' || protocol || ')' AS "secondaryStat",
+    protocol AS detail__protocol,
+    span_count AS detail__span_count,
+    error_count AS detail__error_count,
+    avg_duration_ms AS detail__avg_duration_ms,
+    p95_duration_ms AS detail__p95_duration_ms
+FROM edge_stats;

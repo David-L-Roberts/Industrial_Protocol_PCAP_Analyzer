@@ -467,6 +467,27 @@ public class Dnp3FixtureAndPipelineIntegrationTests : IAsyncLifetime
         Assert.Equal(cmdIdsByFrame[12L].TraceId, spansByRequestFrame[16L].TraceId);
         Assert.Equal(cmdIdsByFrame[12L].SpanId, spansByRequestFrame[16L].ParentSpanId);
 
+        var dnp3Views = await GrafanaViewsVerifier.AssertGrafanaViewsForSessionAsync(
+            conn,
+            summary.SessionId,
+            expectedSpanCount: summary.TraceSpansPersisted,
+            expectedProtocol: "DNP3",
+            expectedNodeCount: 2,
+            expectedEdgeCount: 1);
+
+        Assert.Contains(dnp3Views.Nodes, n => n.Id == "127.0.0.1:4");
+        Assert.Contains(dnp3Views.Nodes, n => n.Id == "127.0.0.1:3");
+        Assert.All(dnp3Views.Nodes, n =>
+        {
+            Assert.Equal(0.0, n.ArcSuccess, precision: 6);
+            Assert.Equal(1.0, n.ArcError, precision: 6);
+        });
+
+        var dnp3Edge = Assert.Single(dnp3Views.Edges);
+        Assert.Equal("127.0.0.1:4->127.0.0.1:3:DNP3", dnp3Edge.Id);
+        Assert.Equal(2L, dnp3Edge.DetailSpanCount);
+        Assert.Equal(2L, dnp3Edge.DetailErrorCount);
+
         if (!_config.KeepTestData)
         {
             await using var dataSource = NpgsqlDataSource.Create(_config.TimescaleConnectionString);

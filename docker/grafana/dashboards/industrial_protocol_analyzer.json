@@ -679,6 +679,21 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "trace_id" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Inspect Trace Waterfall",
+                    "url": "/d/industrial-protocol-traces?var-session=${session}&var-trace_id=${__data.fields.trace_id}&from=${__from}&to=${__to}"
+                  }
+                ]
+              }
+            ]
           }
         ]
       },
@@ -697,7 +712,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n  r.frame_number AS \"Frame #\",\n  to_char(r.timestamp, 'YYYY-MM-DD HH24:MI:SS.MS') AS \"Timestamp\",\n  dp.name AS \"Device Pair\",\n  r.direction AS \"Direction\",\n  r.transaction_id AS \"Tx ID\",\n  r.function_code AS \"FC\",\n  ROUND(r.duration_ms::numeric, 2) AS \"Duration (ms)\",\n  r.error_type AS \"Error Type\",\n  r.status_code AS \"Status Code\"\nFROM red_transactions r\nJOIN device_pairs dp ON r.device_pair_id = dp.id\nWHERE r.session_id = '$session'\n  AND r.device_pair_id IN ($device_pair)\n  AND ('$direction' = 'All' OR r.direction = '$direction')\n  AND (r.is_error = TRUE OR r.duration_ms > 100)\n  AND $__timeFilter(r.timestamp)\nORDER BY r.timestamp DESC\nLIMIT 100;",
+          "rawSql": "SELECT\n  r.frame_number AS \"Frame #\",\n  to_char(r.timestamp, 'YYYY-MM-DD HH24:MI:SS.MS') AS \"Timestamp\",\n  dp.name AS \"Device Pair\",\n  r.direction AS \"Direction\",\n  r.transaction_id AS \"Tx ID\",\n  r.function_code AS \"FC\",\n  ROUND(r.duration_ms::numeric, 2) AS \"Duration (ms)\",\n  r.error_type AS \"Error Type\",\n  r.status_code AS \"Status Code\",\n  r.trace_id AS \"trace_id\"\nFROM red_transactions r\nJOIN device_pairs dp ON r.device_pair_id = dp.id\nWHERE r.session_id = '$session'\n  AND r.device_pair_id IN ($device_pair)\n  AND ('$direction' = 'All' OR r.direction = '$direction')\n  AND (r.is_error = TRUE OR r.duration_ms > 100)\n  AND $__timeFilter(r.timestamp)\nORDER BY r.timestamp DESC\nLIMIT 100;",
           "refId": "A"
         }
       ],
@@ -884,6 +899,21 @@
                 ]
               }
             ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "trace_id" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Inspect Trace Waterfall",
+                    "url": "/d/industrial-protocol-traces?var-session=${session}&var-trace_id=${__data.fields.trace_id}&from=${__from}&to=${__to}"
+                  }
+                ]
+              }
+            ]
           }
         ]
       },
@@ -902,7 +932,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n  tv.frame_number AS \"Frame #\",\n  to_char(tv.packet_timestamp, 'YYYY-MM-DD HH24:MI:SS.MS') AS \"Packet Time\",\n  to_char(tv.event_timestamp, 'HH24:MI:SS.MS') AS \"RTU Event Time\",\n  td.tag_name AS \"Tag Name\",\n  td.protocol_address AS \"Address\",\n  COALESCE(tv.scaled_numeric_value::text, tv.boolean_value::text, tv.raw_hex) AS \"New Value\",\n  td.engineering_units AS \"Units\",\n  COALESCE(tv.quality_flags, 'NORMAL') AS \"Quality Flags\"\nFROM tag_values tv\nJOIN tag_definitions td ON tv.tag_id = td.id\nWHERE tv.session_id = '$session'\n  AND td.device_pair_id IN ($device_pair)\n  AND tv.tag_id IN ($tag)\n  AND tv.is_value_change = TRUE\n  AND $__timeFilter(tv.packet_timestamp)\nORDER BY tv.packet_timestamp DESC\nLIMIT 100;",
+          "rawSql": "SELECT\n  tv.frame_number AS \"Frame #\",\n  to_char(tv.packet_timestamp, 'YYYY-MM-DD HH24:MI:SS.MS') AS \"Packet Time\",\n  to_char(tv.event_timestamp, 'HH24:MI:SS.MS') AS \"RTU Event Time\",\n  td.tag_name AS \"Tag Name\",\n  td.protocol_address AS \"Address\",\n  COALESCE(tv.scaled_numeric_value::text, tv.boolean_value::text, tv.raw_hex) AS \"New Value\",\n  td.engineering_units AS \"Units\",\n  COALESCE(tv.quality_flags, 'NORMAL') AS \"Quality Flags\",\n  tv.trace_id AS \"trace_id\"\nFROM tag_values tv\nJOIN tag_definitions td ON tv.tag_id = td.id\nWHERE tv.session_id = '$session'\n  AND td.device_pair_id IN ($device_pair)\n  AND tv.tag_id IN ($tag)\n  AND tv.is_value_change = TRUE\n  AND $__timeFilter(tv.packet_timestamp)\nORDER BY tv.packet_timestamp DESC\nLIMIT 100;",
           "refId": "A"
         }
       ],
@@ -1077,6 +1107,21 @@
                 ]
               }
             ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "trace_id" },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "targetBlank": false,
+                    "title": "Inspect Trace Waterfall",
+                    "url": "/d/industrial-protocol-traces?var-session=${session}&var-trace_id=${__data.fields.trace_id}&from=${__from}&to=${__to}"
+                  }
+                ]
+              }
+            ]
           }
         ]
       },
@@ -1095,7 +1140,7 @@
           "editorMode": "code",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT\n  c.frame_number AS \"Frame #\",\n  to_char(c.timestamp, 'YYYY-MM-DD HH24:MI:SS.MS') AS \"Timestamp\",\n  dp.name AS \"Device Pair\",\n  c.protocol AS \"Protocol\",\n  c.command_type AS \"Command Type\",\n  c.target_address AS \"Target Address\",\n  COALESCE(c.control_action, '-') AS \"Action\",\n  c.command_count AS \"Count\",\n  c.pulse_on_ms AS \"Pulse On (ms)\",\n  c.pulse_off_ms AS \"Pulse Off (ms)\",\n  c.unscaled_command_value AS \"Value\",\n  '0x' || encode(c.raw_pdu_bytes, 'hex') AS \"Raw PDU Hex\"\nFROM captured_command_events c\nJOIN device_pairs dp ON c.device_pair_id = dp.id\nWHERE c.session_id = '$session'\n  AND c.device_pair_id IN ($device_pair)\n  AND $__timeFilter(c.timestamp)\nORDER BY c.frame_number ASC\nLIMIT 100;",
+          "rawSql": "SELECT\n  c.frame_number AS \"Frame #\",\n  to_char(c.timestamp, 'YYYY-MM-DD HH24:MI:SS.MS') AS \"Timestamp\",\n  dp.name AS \"Device Pair\",\n  c.protocol AS \"Protocol\",\n  c.command_type AS \"Command Type\",\n  c.target_address AS \"Target Address\",\n  COALESCE(c.control_action, '-') AS \"Action\",\n  c.command_count AS \"Count\",\n  c.pulse_on_ms AS \"Pulse On (ms)\",\n  c.pulse_off_ms AS \"Pulse Off (ms)\",\n  c.unscaled_command_value AS \"Value\",\n  '0x' || encode(c.raw_pdu_bytes, 'hex') AS \"Raw PDU Hex\",\n  c.trace_id AS \"trace_id\"\nFROM captured_command_events c\nJOIN device_pairs dp ON c.device_pair_id = dp.id\nWHERE c.session_id = '$session'\n  AND c.device_pair_id IN ($device_pair)\n  AND $__timeFilter(c.timestamp)\nORDER BY c.frame_number ASC\nLIMIT 100;",
           "refId": "A"
         }
       ],

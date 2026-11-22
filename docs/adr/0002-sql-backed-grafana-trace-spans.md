@@ -1,6 +1,6 @@
 # ADR 0002: SQL-Backed Trace & Span Metadata for Grafana Visualizations
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-11-20
 
 ## Context

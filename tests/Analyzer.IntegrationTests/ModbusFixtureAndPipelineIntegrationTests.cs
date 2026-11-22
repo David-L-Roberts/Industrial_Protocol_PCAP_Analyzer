@@ -332,6 +332,25 @@ public class ModbusFixtureAndPipelineIntegrationTests : IAsyncLifetime
             Assert.Equal(0L, Convert.ToInt64(await corrCmd.ExecuteScalarAsync()));
         }
 
+        var modbusViews = await GrafanaViewsVerifier.AssertGrafanaViewsForSessionAsync(
+            conn,
+            summary.SessionId,
+            expectedSpanCount: summary.TraceSpansPersisted,
+            expectedProtocol: "ModbusTCP",
+            expectedNodeCount: 3,
+            expectedEdgeCount: 2);
+
+        Assert.Contains(modbusViews.Nodes, n => n.Id == "10.20.188.9");
+        Assert.Contains(modbusViews.Nodes, n => n.Id == "10.20.188.25:247");
+        Assert.Contains(modbusViews.Nodes, n => n.Id == "10.20.188.2:1");
+        Assert.All(modbusViews.Nodes, n =>
+        {
+            Assert.Equal(1.0, n.ArcSuccess, precision: 6);
+            Assert.Equal(0.0, n.ArcError, precision: 6);
+        });
+        Assert.Contains(modbusViews.Edges, e => e.Id == "10.20.188.9->10.20.188.25:247:ModbusTCP");
+        Assert.Contains(modbusViews.Edges, e => e.Id == "10.20.188.9->10.20.188.2:1:ModbusTCP");
+
         if (!_config.KeepTestData)
         {
             await using var dataSource = NpgsqlDataSource.Create(_config.TimescaleConnectionString);
