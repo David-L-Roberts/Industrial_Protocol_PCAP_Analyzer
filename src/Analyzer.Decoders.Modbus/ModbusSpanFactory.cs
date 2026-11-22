@@ -4,6 +4,21 @@ using Analyzer.Core.Services;
 
 namespace Analyzer.Decoders.Modbus;
 
+internal readonly record struct SpanCorrelationIds(TraceId TraceId, SpanId SpanId)
+{
+    public static SpanCorrelationIds Allocate(DeviceEndpointPair pair, long frameNumber, SpanCorrelationRole role) =>
+        new(
+            DeterministicTraceIdGenerator.CreateTraceId(pair.SessionId, pair.Id, frameNumber, role),
+            DeterministicTraceIdGenerator.CreateSpanId(pair.SessionId, pair.Id, frameNumber, role));
+}
+
+internal readonly record struct ModbusFrameMetadata(
+    DissectedFrame Frame,
+    DeviceEndpointPair Pair,
+    string TransactionId,
+    byte? UnitId,
+    short FunctionCode);
+
 internal sealed class TagChangeEventCollector
 {
     public const int MaxEventsPerSpan = 10;
@@ -52,18 +67,19 @@ internal static class ModbusSpanFactory
 {
     public const string MalformedOperationName = "Modbus MalformedFrame";
 
-    public static string FormatOperationName(byte baseFunctionCode) => baseFunctionCode switch
-    {
-        0x01 => "Modbus FC01 ReadCoils",
-        0x02 => "Modbus FC02 ReadDiscreteInputs",
-        0x03 => "Modbus FC03 ReadHoldingRegisters",
-        0x04 => "Modbus FC04 ReadInputRegisters",
-        0x05 => "Modbus FC05 WriteSingleCoil",
-        0x06 => "Modbus FC06 WriteSingleRegister",
-        0x0F => "Modbus FC15 WriteMultipleCoils",
-        0x10 => "Modbus FC16 WriteMultipleRegisters",
-        _ => string.Create(CultureInfo.InvariantCulture, $"Modbus FC{baseFunctionCode:D2} Unknown")
-    };
+    public static string FormatOperationName(byte baseFunctionCode) =>
+        (ModbusFunctionCode)baseFunctionCode switch
+        {
+            ModbusFunctionCode.ReadCoils => "Modbus FC01 ReadCoils",
+            ModbusFunctionCode.ReadDiscreteInputs => "Modbus FC02 ReadDiscreteInputs",
+            ModbusFunctionCode.ReadHoldingRegisters => "Modbus FC03 ReadHoldingRegisters",
+            ModbusFunctionCode.ReadInputRegisters => "Modbus FC04 ReadInputRegisters",
+            ModbusFunctionCode.WriteSingleCoil => "Modbus FC05 WriteSingleCoil",
+            ModbusFunctionCode.WriteSingleRegister => "Modbus FC06 WriteSingleRegister",
+            ModbusFunctionCode.WriteMultipleCoils => "Modbus FC15 WriteMultipleCoils",
+            ModbusFunctionCode.WriteMultipleRegisters => "Modbus FC16 WriteMultipleRegisters",
+            _ => string.Create(CultureInfo.InvariantCulture, $"Modbus FC{baseFunctionCode:D2} Unknown")
+        };
 
     public static string FormatExceptionStatusMessage(TransactionStatusCode statusCode) => statusCode switch
     {
@@ -80,39 +96,31 @@ internal static class ModbusSpanFactory
     };
 
     public static PendingSpanContext CreateRequestPendingSpanContext(
-        DissectedFrame requestFrame,
-        DeviceEndpointPair pair,
-        TraceId traceId,
-        SpanId spanId,
-        string transactionId,
-        byte unitId,
-        byte functionCode,
+        ModbusFrameMetadata metadata,
+        SpanCorrelationIds ids,
         ModbusRegisterType registerType,
         ushort startAddress,
         ushort quantity,
         CapturedCommandEventRecord? writeCommand = null,
         TagChangeEventCollector? writeTagCollector = null)
     {
-        string clientEndpoint = pair.ResolveClientEndpoint();
-        string serverEndpoint = pair.ResolveServerEndpoint();
+        string clientEndpoint = metadata.Pair.ResolveClientEndpoint();
+        string serverEndpoint = metadata.Pair.ResolveServerEndpoint();
 
-        var attributes = CreateBaseAttributes(
-            requestFrame,
-            pair,
-            TrafficDirection.ClientToServer,
-            transactionId,
-            functionCode);
-
-        attributes["pcap.request_frame"] = requestFrame.FrameNumber;
-        attributes["pcap.request_bytes"] = requestFrame.RawApplicationPayload.Length;
-        attributes["modbus.unit_id"] = (int)unitId;
+        var attributes = CreateBaseAttributes(metadata, TrafficDirection.ClientToServer);
+        attributes["pcap.request_frame"] = metadata.Frame.FrameNumber;
+        attributes["pcap.request_bytes"] = metadata.Frame.RawApplicationPayload.Length;
+        if (metadata.UnitId.HasValue)
+        {
+            attributes["modbus.unit_id"] = (int)metadata.UnitId.Value;
+        }
         attributes["modbus.register_type"] = registerType;
         attributes["modbus.start_address"] = (int)startAddress;
         attributes["modbus.quantity"] = (int)quantity;
 
         var events = new List<SpanEventRecord>
         {
-            CreateFrameMilestoneEvent(requestFrame, SpanEventKind.RequestSent)
+            CreateFrameMilestoneEvent(metadata.Frame, SpanEventKind.RequestSent)
         };
 
         if (writeCommand is not null)
@@ -134,7 +142,7 @@ internal static class ModbusSpanFactory
             }
 
             events.Add(new SpanEventRecord(
-                TimestampUtc: requestFrame.TimestampUtc,
+                TimestampUtc: metadata.Frame.TimestampUtc,
                 Kind: SpanEventKind.CommandIssued,
                 Name: string.Empty,
                 Fields: cmdFields));
@@ -153,11 +161,11 @@ internal static class ModbusSpanFactory
         }
 
         return new PendingSpanContext(
-            TraceId: traceId,
-            SpanId: spanId,
+            TraceId: ids.TraceId,
+            SpanId: ids.SpanId,
             ParentSpanId: null,
             ServiceName: serverEndpoint,
-            OperationName: FormatOperationName(functionCode),
+            OperationName: FormatOperationName((byte)metadata.FunctionCode),
             Protocol: ProtocolType.ModbusTcp,
             ClientEndpoint: clientEndpoint,
             ServerEndpoint: serverEndpoint,
@@ -165,8 +173,8 @@ internal static class ModbusSpanFactory
             Events: events,
             SpanKind: SpanKind.Client,
             Direction: TrafficDirection.ClientToServer,
-            RequestTimestampUtc: requestFrame.TimestampUtc,
-            RequestFrameNumber: requestFrame.FrameNumber);
+            RequestTimestampUtc: metadata.Frame.TimestampUtc,
+            RequestFrameNumber: metadata.Frame.FrameNumber);
     }
 
     public static TraceSpanRecord CreateResponseSpan(
@@ -176,6 +184,7 @@ internal static class ModbusSpanFactory
         byte baseFunctionCode,
         bool isException,
         byte? exceptionCode,
+        TagChangeEventCollector? writeTagCollector,
         TagChangeEventCollector? responseTagCollector)
     {
         var attributes = new Dictionary<string, object?>(spanContext.Attributes)
@@ -184,17 +193,13 @@ internal static class ModbusSpanFactory
             ["pcap.response_bytes"] = responseFrame.RawApplicationPayload.Length
         };
 
-        int existingMatched = GetIntAttribute(attributes, "tags.matched_count");
-        int existingChanged = GetIntAttribute(attributes, "tags.changed_count");
-        bool existingTruncated = GetBoolAttribute(attributes, "tags.changes_truncated");
-
-        int totalMatched = existingMatched + (responseTagCollector?.MatchedCount ?? 0);
-        int totalChanged = existingChanged + (responseTagCollector?.ChangedCount ?? 0);
+        int totalMatched = (writeTagCollector?.MatchedCount ?? 0) + (responseTagCollector?.MatchedCount ?? 0);
+        int totalChanged = (writeTagCollector?.ChangedCount ?? 0) + (responseTagCollector?.ChangedCount ?? 0);
 
         attributes["tags.matched_count"] = totalMatched;
         attributes["tags.changed_count"] = totalChanged;
 
-        if (existingTruncated ||
+        if ((writeTagCollector?.ChangesTruncated ?? false) ||
             (responseTagCollector?.ChangesTruncated ?? false) ||
             totalChanged > TagChangeEventCollector.MaxEventsPerSpan)
         {
@@ -207,16 +212,7 @@ internal static class ModbusSpanFactory
         }
 
         var events = new List<SpanEventRecord>(spanContext.Events.Count + 2 + (responseTagCollector?.Events.Count ?? 0));
-        int existingTagEvents = 0;
-        foreach (var existing in spanContext.Events)
-        {
-            events.Add(existing);
-            if (existing.Kind == SpanEventKind.TagValueChanged)
-            {
-                existingTagEvents++;
-            }
-        }
-
+        events.AddRange(spanContext.Events);
         events.Add(CreateFrameMilestoneEvent(responseFrame, SpanEventKind.ResponseReceived));
 
         if (isException)
@@ -226,6 +222,7 @@ internal static class ModbusSpanFactory
 
         if (responseTagCollector is not null)
         {
+            int existingTagEvents = writeTagCollector?.Events.Count ?? 0;
             int remainingTagSlots = Math.Max(0, TagChangeEventCollector.MaxEventsPerSpan - existingTagEvents);
             for (int i = 0; i < responseTagCollector.Events.Count && i < remainingTagSlots; i++)
             {
@@ -265,40 +262,23 @@ internal static class ModbusSpanFactory
     }
 
     public static TraceSpanRecord CreateOrphanResponseSpan(
-        DissectedFrame frame,
-        DeviceEndpointPair pair,
-        string transactionId,
-        byte unitId,
-        byte baseFunctionCode,
+        ModbusFrameMetadata metadata,
         ModbusRegisterType? registerType,
         bool isException,
         byte? exceptionCode,
         TransactionStatusCode? exceptionStatusCode)
     {
-        var traceId = DeterministicTraceIdGenerator.CreateTraceId(
-            pair.SessionId,
-            pair.Id,
-            frame.FrameNumber,
-            SpanCorrelationRole.OrphanResponse);
-        var spanId = DeterministicTraceIdGenerator.CreateSpanId(
-            pair.SessionId,
-            pair.Id,
-            frame.FrameNumber,
-            SpanCorrelationRole.OrphanResponse);
+        var ids = SpanCorrelationIds.Allocate(metadata.Pair, metadata.Frame.FrameNumber, SpanCorrelationRole.OrphanResponse);
+        string clientEndpoint = metadata.Pair.ResolveClientEndpoint();
+        string serverEndpoint = metadata.Pair.ResolveServerEndpoint();
 
-        string clientEndpoint = pair.ResolveClientEndpoint();
-        string serverEndpoint = pair.ResolveServerEndpoint();
-
-        var attributes = CreateBaseAttributes(
-            frame,
-            pair,
-            TrafficDirection.ServerToClient,
-            transactionId,
-            baseFunctionCode);
-
-        attributes["pcap.response_frame"] = frame.FrameNumber;
-        attributes["pcap.response_bytes"] = frame.RawApplicationPayload.Length;
-        attributes["modbus.unit_id"] = (int)unitId;
+        var attributes = CreateBaseAttributes(metadata, TrafficDirection.ServerToClient);
+        attributes["pcap.response_frame"] = metadata.Frame.FrameNumber;
+        attributes["pcap.response_bytes"] = metadata.Frame.RawApplicationPayload.Length;
+        if (metadata.UnitId.HasValue)
+        {
+            attributes["modbus.unit_id"] = (int)metadata.UnitId.Value;
+        }
         attributes["protocol.unpaired"] = true;
 
         if (registerType.HasValue)
@@ -313,25 +293,25 @@ internal static class ModbusSpanFactory
 
         var events = new List<SpanEventRecord>
         {
-            CreateFrameMilestoneEvent(frame, SpanEventKind.ResponseReceived)
+            CreateFrameMilestoneEvent(metadata.Frame, SpanEventKind.ResponseReceived)
         };
 
         if (isException && exceptionStatusCode.HasValue)
         {
-            events.Add(CreateProtocolExceptionEvent(frame.TimestampUtc, exceptionCode, exceptionStatusCode.Value));
+            events.Add(CreateProtocolExceptionEvent(metadata.Frame.TimestampUtc, exceptionCode, exceptionStatusCode.Value));
         }
 
         return new TraceSpanRecord(
-            StartTimeUtc: frame.TimestampUtc,
-            EndTimeUtc: frame.TimestampUtc,
+            StartTimeUtc: metadata.Frame.TimestampUtc,
+            EndTimeUtc: metadata.Frame.TimestampUtc,
             DurationMs: 0.0,
-            SessionId: pair.SessionId,
-            DevicePairId: pair.Id,
-            TraceId: traceId,
-            SpanId: spanId,
+            SessionId: metadata.Pair.SessionId,
+            DevicePairId: metadata.Pair.Id,
+            TraceId: ids.TraceId,
+            SpanId: ids.SpanId,
             ParentSpanId: null,
             ServiceName: clientEndpoint,
-            OperationName: FormatOperationName(baseFunctionCode),
+            OperationName: FormatOperationName((byte)metadata.FunctionCode),
             SpanKind: SpanKind.Consumer,
             OriginKind: SpanOriginKind.OrphanResponse,
             StatusCode: isException ? SpanStatusCode.Error : SpanStatusCode.Unset,
@@ -343,52 +323,47 @@ internal static class ModbusSpanFactory
             ServerEndpoint: serverEndpoint,
             Direction: TrafficDirection.ServerToClient,
             RequestFrameNumber: null,
-            ResponseFrameNumber: frame.FrameNumber,
-            TransactionId: transactionId,
-            FunctionCode: (short)baseFunctionCode,
+            ResponseFrameNumber: metadata.Frame.FrameNumber,
+            TransactionId: metadata.TransactionId,
+            FunctionCode: metadata.FunctionCode,
             Attributes: attributes,
             Events: events);
     }
 
     public static TraceSpanRecord CreateMalformedSpan(
-        DissectedFrame frame,
-        DeviceEndpointPair pair,
+        ModbusFrameMetadata metadata,
         TrafficDirection direction,
-        TraceId traceId,
-        SpanId spanId,
-        string transactionId,
-        short functionCode,
-        byte? unitId)
+        SpanCorrelationIds ids)
     {
-        string clientEndpoint = pair.ResolveClientEndpoint();
-        string serverEndpoint = pair.ResolveServerEndpoint();
+        string clientEndpoint = metadata.Pair.ResolveClientEndpoint();
+        string serverEndpoint = metadata.Pair.ResolveServerEndpoint();
         bool isClientToServer = direction == TrafficDirection.ClientToServer;
 
-        var attributes = CreateBaseAttributes(frame, pair, direction, transactionId, functionCode);
+        var attributes = CreateBaseAttributes(metadata, direction);
         if (isClientToServer)
         {
-            attributes["pcap.request_frame"] = frame.FrameNumber;
-            attributes["pcap.request_bytes"] = frame.RawApplicationPayload.Length;
+            attributes["pcap.request_frame"] = metadata.Frame.FrameNumber;
+            attributes["pcap.request_bytes"] = metadata.Frame.RawApplicationPayload.Length;
         }
         else
         {
-            attributes["pcap.response_frame"] = frame.FrameNumber;
-            attributes["pcap.response_bytes"] = frame.RawApplicationPayload.Length;
+            attributes["pcap.response_frame"] = metadata.Frame.FrameNumber;
+            attributes["pcap.response_bytes"] = metadata.Frame.RawApplicationPayload.Length;
         }
 
-        if (unitId.HasValue)
+        if (metadata.UnitId.HasValue)
         {
-            attributes["modbus.unit_id"] = (int)unitId.Value;
+            attributes["modbus.unit_id"] = (int)metadata.UnitId.Value;
         }
 
         return new TraceSpanRecord(
-            StartTimeUtc: frame.TimestampUtc,
-            EndTimeUtc: frame.TimestampUtc,
+            StartTimeUtc: metadata.Frame.TimestampUtc,
+            EndTimeUtc: metadata.Frame.TimestampUtc,
             DurationMs: 0.0,
-            SessionId: pair.SessionId,
-            DevicePairId: pair.Id,
-            TraceId: traceId,
-            SpanId: spanId,
+            SessionId: metadata.Pair.SessionId,
+            DevicePairId: metadata.Pair.Id,
+            TraceId: ids.TraceId,
+            SpanId: ids.SpanId,
             ParentSpanId: null,
             ServiceName: isClientToServer ? serverEndpoint : clientEndpoint,
             OperationName: MalformedOperationName,
@@ -400,39 +375,36 @@ internal static class ModbusSpanFactory
             ClientEndpoint: clientEndpoint,
             ServerEndpoint: serverEndpoint,
             Direction: direction,
-            RequestFrameNumber: isClientToServer ? frame.FrameNumber : null,
-            ResponseFrameNumber: isClientToServer ? null : frame.FrameNumber,
-            TransactionId: transactionId,
-            FunctionCode: functionCode,
+            RequestFrameNumber: isClientToServer ? metadata.Frame.FrameNumber : null,
+            ResponseFrameNumber: isClientToServer ? null : metadata.Frame.FrameNumber,
+            TransactionId: metadata.TransactionId,
+            FunctionCode: metadata.FunctionCode,
             Attributes: attributes,
             Events: []);
     }
 
     private static Dictionary<string, object?> CreateBaseAttributes(
-        DissectedFrame frame,
-        DeviceEndpointPair pair,
-        TrafficDirection direction,
-        string transactionId,
-        int functionCode)
+        ModbusFrameMetadata metadata,
+        TrafficDirection direction)
     {
         bool isClientToServer = direction == TrafficDirection.ClientToServer;
-        string clientIp = (isClientToServer ? frame.SourceIp : frame.DestIp).ToString();
-        int clientPort = isClientToServer ? frame.SourcePort : frame.DestPort;
-        string serverIp = (isClientToServer ? frame.DestIp : frame.SourceIp).ToString();
-        int serverPort = isClientToServer ? frame.DestPort : frame.SourcePort;
+        string clientIp = (isClientToServer ? metadata.Frame.SourceIp : metadata.Frame.DestIp).ToString();
+        int clientPort = isClientToServer ? metadata.Frame.SourcePort : metadata.Frame.DestPort;
+        string serverIp = (isClientToServer ? metadata.Frame.DestIp : metadata.Frame.SourceIp).ToString();
+        int serverPort = isClientToServer ? metadata.Frame.DestPort : metadata.Frame.SourcePort;
 
         return new Dictionary<string, object?>
         {
             ["protocol"] = ProtocolType.ModbusTcp,
-            ["session.id"] = pair.SessionId,
-            ["device_pair.id"] = pair.Id,
-            ["device_pair.name"] = pair.Name,
+            ["session.id"] = metadata.Pair.SessionId,
+            ["device_pair.id"] = metadata.Pair.Id,
+            ["device_pair.name"] = metadata.Pair.Name,
             ["net.client.ip"] = clientIp,
             ["net.client.port"] = clientPort,
             ["net.server.ip"] = serverIp,
             ["net.server.port"] = serverPort,
-            ["protocol.function_code"] = functionCode,
-            ["protocol.transaction_id"] = transactionId
+            ["protocol.function_code"] = (int)metadata.FunctionCode,
+            ["protocol.transaction_id"] = metadata.TransactionId
         };
     }
 
@@ -468,10 +440,4 @@ internal static class ModbusSpanFactory
             Name: string.Empty,
             Fields: fields);
     }
-
-    private static int GetIntAttribute(IReadOnlyDictionary<string, object?> attributes, string key) =>
-        attributes.TryGetValue(key, out object? raw) && raw is int value ? value : 0;
-
-    private static bool GetBoolAttribute(IReadOnlyDictionary<string, object?> attributes, string key) =>
-        attributes.TryGetValue(key, out object? raw) && raw is bool value && value;
 }

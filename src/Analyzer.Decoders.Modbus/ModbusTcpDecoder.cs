@@ -27,7 +27,8 @@ public class ModbusTcpDecoder : IProtocolDecoder
         byte UnitId,
         ModbusFunctionCode FunctionCode,
         ushort StartAddress,
-        ushort Quantity);
+        ushort Quantity,
+        TagChangeEventCollector? WriteTagCollector = null);
 
     private readonly record struct FrameExtractionContext(
         DissectedFrame Frame,
@@ -83,26 +84,12 @@ public class ModbusTcpDecoder : IProtocolDecoder
 
             if (_storeTraceSpans)
             {
-                malformedTraceId = DeterministicTraceIdGenerator.CreateTraceId(
-                    pair.SessionId,
-                    pair.Id,
-                    frame.FrameNumber,
-                    SpanCorrelationRole.Malformed);
-                malformedSpanId = DeterministicTraceIdGenerator.CreateSpanId(
-                    pair.SessionId,
-                    pair.Id,
-                    frame.FrameNumber,
-                    SpanCorrelationRole.Malformed);
+                var ids = SpanCorrelationIds.Allocate(pair, frame.FrameNumber, SpanCorrelationRole.Malformed);
+                malformedTraceId = ids.TraceId;
+                malformedSpanId = ids.SpanId;
                 byte? unitIdForMalformed = payload.Length >= 7 ? payload[6] : null;
-                malformedSpans.Add(ModbusSpanFactory.CreateMalformedSpan(
-                    frame,
-                    pair,
-                    direction,
-                    malformedTraceId.Value,
-                    malformedSpanId.Value,
-                    transactionId,
-                    functionCode,
-                    unitIdForMalformed));
+                var metadata = new ModbusFrameMetadata(frame, pair, transactionId, unitIdForMalformed, functionCode);
+                malformedSpans.Add(ModbusSpanFactory.CreateMalformedSpan(metadata, direction, ids));
             }
 
             var malformedTx = new ProtocolTransactionRecord(
@@ -148,25 +135,11 @@ public class ModbusTcpDecoder : IProtocolDecoder
                 PendingSpanContext? spanContext = null;
                 if (_storeTraceSpans)
                 {
-                    var traceId = DeterministicTraceIdGenerator.CreateTraceId(
-                        pair.SessionId,
-                        pair.Id,
-                        frame.FrameNumber,
-                        SpanCorrelationRole.Transaction);
-                    var spanId = DeterministicTraceIdGenerator.CreateSpanId(
-                        pair.SessionId,
-                        pair.Id,
-                        frame.FrameNumber,
-                        SpanCorrelationRole.Transaction);
-
+                    var ids = SpanCorrelationIds.Allocate(pair, frame.FrameNumber, SpanCorrelationRole.Transaction);
+                    var metadata = new ModbusFrameMetadata(frame, pair, transactionId, unitId, rawFc);
                     spanContext = ModbusSpanFactory.CreateRequestPendingSpanContext(
-                        frame,
-                        pair,
-                        traceId,
-                        spanId,
-                        transactionId,
-                        unitId,
-                        rawFc,
+                        metadata,
+                        ids,
                         ToRegisterType(readFc),
                         startAddress,
                         quantity);
@@ -191,16 +164,9 @@ public class ModbusTcpDecoder : IProtocolDecoder
 
                 if (_storeTraceSpans)
                 {
-                    writeTraceId = DeterministicTraceIdGenerator.CreateTraceId(
-                        pair.SessionId,
-                        pair.Id,
-                        frame.FrameNumber,
-                        SpanCorrelationRole.Transaction);
-                    writeSpanId = DeterministicTraceIdGenerator.CreateSpanId(
-                        pair.SessionId,
-                        pair.Id,
-                        frame.FrameNumber,
-                        SpanCorrelationRole.Transaction);
+                    var ids = SpanCorrelationIds.Allocate(pair, frame.FrameNumber, SpanCorrelationRole.Transaction);
+                    writeTraceId = ids.TraceId;
+                    writeSpanId = ids.SpanId;
                     writeTagCollector = new TagChangeEventCollector();
                 }
 
@@ -227,6 +193,7 @@ public class ModbusTcpDecoder : IProtocolDecoder
         }
         else
         {
+            var serverMetadata = new ModbusFrameMetadata(frame, pair, transactionId, unitId, baseFcByte);
             if (isException)
             {
                 byte exceptionCode = pdu[1];
@@ -245,30 +212,26 @@ public class ModbusTcpDecoder : IProtocolDecoder
                         correlationKey: correlationKey))
                 {
                     transactions.Add(exTx);
-                    if (_storeTraceSpans && spanContext is not null)
-                    {
-                        traceSpans.Add(ModbusSpanFactory.CreateResponseSpan(
-                            frame,
-                            exTx,
-                            spanContext,
-                            baseFcByte,
-                            isException: true,
-                            exceptionCode: exceptionCode,
-                            responseTagCollector: null));
-                    }
-                }
-                else if (_storeTraceSpans)
-                {
-                    traceSpans.Add(ModbusSpanFactory.CreateOrphanResponseSpan(
+                    EmitMatchedResponseSpanIfTracing(
+                        traceSpans,
                         frame,
-                        pair,
-                        transactionId,
-                        unitId,
+                        exTx,
+                        reqContext,
+                        spanContext,
                         baseFcByte,
+                        isException: true,
+                        exceptionCode: exceptionCode,
+                        responseTagCollector: null);
+                }
+                else
+                {
+                    EmitOrphanSpanIfTracing(
+                        traceSpans,
+                        serverMetadata,
                         TryResolveRegisterType(baseFcByte),
                         isException: true,
                         exceptionCode: exceptionCode,
-                        exceptionStatusCode: statusCode));
+                        exceptionStatusCode: statusCode);
                 }
             }
             else if (TryParseReadFunctionCode(rawFc, out var readFc))
@@ -326,30 +289,26 @@ public class ModbusTcpDecoder : IProtocolDecoder
                             unmappedRegisters);
                     }
 
-                    if (_storeTraceSpans && spanContext is not null)
-                    {
-                        traceSpans.Add(ModbusSpanFactory.CreateResponseSpan(
-                            frame,
-                            okTx,
-                            spanContext,
-                            baseFcByte,
-                            isException: false,
-                            exceptionCode: null,
-                            responseTagCollector: responseTagCollector));
-                    }
-                }
-                else if (_storeTraceSpans)
-                {
-                    traceSpans.Add(ModbusSpanFactory.CreateOrphanResponseSpan(
+                    EmitMatchedResponseSpanIfTracing(
+                        traceSpans,
                         frame,
-                        pair,
-                        transactionId,
-                        unitId,
+                        okTx,
+                        reqContext,
+                        spanContext,
                         baseFcByte,
+                        isException: false,
+                        exceptionCode: null,
+                        responseTagCollector: responseTagCollector);
+                }
+                else
+                {
+                    EmitOrphanSpanIfTracing(
+                        traceSpans,
+                        serverMetadata,
                         registerType,
                         isException: false,
                         exceptionCode: null,
-                        exceptionStatusCode: null));
+                        exceptionStatusCode: null);
                 }
             }
             else if (TryParseWriteFunctionCode(rawFc, out var writeFc))
@@ -363,49 +322,42 @@ public class ModbusTcpDecoder : IProtocolDecoder
                         isException: false,
                         statusCode: TransactionStatusCode.Success,
                         out var okTx,
-                        out _,
+                        out var reqContext,
                         out var spanContext,
                         correlationKey: correlationKey))
                 {
                     transactions.Add(okTx);
-                    if (_storeTraceSpans && spanContext is not null)
-                    {
-                        traceSpans.Add(ModbusSpanFactory.CreateResponseSpan(
-                            frame,
-                            okTx,
-                            spanContext,
-                            baseFcByte,
-                            isException: false,
-                            exceptionCode: null,
-                            responseTagCollector: null));
-                    }
-                }
-                else if (_storeTraceSpans)
-                {
-                    traceSpans.Add(ModbusSpanFactory.CreateOrphanResponseSpan(
+                    EmitMatchedResponseSpanIfTracing(
+                        traceSpans,
                         frame,
-                        pair,
-                        transactionId,
-                        unitId,
+                        okTx,
+                        reqContext,
+                        spanContext,
                         baseFcByte,
+                        isException: false,
+                        exceptionCode: null,
+                        responseTagCollector: null);
+                }
+                else
+                {
+                    EmitOrphanSpanIfTracing(
+                        traceSpans,
+                        serverMetadata,
                         ToRegisterType(writeFc),
                         isException: false,
                         exceptionCode: null,
-                        exceptionStatusCode: null));
+                        exceptionStatusCode: null);
                 }
             }
-            else if (_storeTraceSpans)
+            else
             {
-                traceSpans.Add(ModbusSpanFactory.CreateOrphanResponseSpan(
-                    frame,
-                    pair,
-                    transactionId,
-                    unitId,
-                    baseFcByte,
+                EmitOrphanSpanIfTracing(
+                    traceSpans,
+                    serverMetadata,
                     registerType: null,
                     isException: false,
                     exceptionCode: null,
-                    exceptionStatusCode: null));
+                    exceptionStatusCode: null);
             }
         }
 
@@ -414,6 +366,54 @@ public class ModbusTcpDecoder : IProtocolDecoder
 
     public TimeoutFlushOutput FlushExpiredTimeouts(DateTime currentVirtualTime, bool isEndOfFile) =>
         _redEngine.FlushExpiredTimeouts(currentVirtualTime, isEndOfFile);
+
+    private void EmitMatchedResponseSpanIfTracing(
+        List<TraceSpanRecord> traceSpans,
+        DissectedFrame frame,
+        ProtocolTransactionRecord transaction,
+        ModbusRequestContext reqContext,
+        PendingSpanContext? spanContext,
+        byte baseFunctionCode,
+        bool isException,
+        byte? exceptionCode,
+        TagChangeEventCollector? responseTagCollector)
+    {
+        if (!_storeTraceSpans || spanContext is null)
+        {
+            return;
+        }
+
+        traceSpans.Add(ModbusSpanFactory.CreateResponseSpan(
+            frame,
+            transaction,
+            spanContext,
+            baseFunctionCode,
+            isException,
+            exceptionCode,
+            reqContext.WriteTagCollector,
+            responseTagCollector));
+    }
+
+    private void EmitOrphanSpanIfTracing(
+        List<TraceSpanRecord> traceSpans,
+        ModbusFrameMetadata metadata,
+        ModbusRegisterType? registerType,
+        bool isException,
+        byte? exceptionCode,
+        TransactionStatusCode? exceptionStatusCode)
+    {
+        if (!_storeTraceSpans)
+        {
+            return;
+        }
+
+        traceSpans.Add(ModbusSpanFactory.CreateOrphanResponseSpan(
+            metadata,
+            registerType,
+            isException,
+            exceptionCode,
+            exceptionStatusCode));
+    }
 
     private void ProcessWriteRequest(
         FrameExtractionContext extractionContext,
@@ -512,14 +512,16 @@ public class ModbusTcpDecoder : IProtocolDecoder
             extractionContext.TraceId.HasValue &&
             extractionContext.SpanId.HasValue)
         {
-            spanContext = ModbusSpanFactory.CreateRequestPendingSpanContext(
+            var ids = new SpanCorrelationIds(extractionContext.TraceId.Value, extractionContext.SpanId.Value);
+            var metadata = new ModbusFrameMetadata(
                 extractionContext.Frame,
                 extractionContext.Pair,
-                extractionContext.TraceId.Value,
-                extractionContext.SpanId.Value,
                 transactionId,
                 extractionContext.UnitId,
-                (byte)writeFc,
+                (byte)writeFc);
+            spanContext = ModbusSpanFactory.CreateRequestPendingSpanContext(
+                metadata,
+                ids,
                 extractionContext.RegisterType,
                 startAddress,
                 quantity,
@@ -527,7 +529,12 @@ public class ModbusTcpDecoder : IProtocolDecoder
                 writeTagCollector: extractionContext.TagChangeCollector);
         }
 
-        var reqContext = new ModbusRequestContext(extractionContext.UnitId, writeFc, startAddress, quantity);
+        var reqContext = new ModbusRequestContext(
+            extractionContext.UnitId,
+            writeFc,
+            startAddress,
+            quantity,
+            extractionContext.TagChangeCollector);
         _redEngine.RegisterRequest(
             sessionId: extractionContext.Pair.SessionId,
             devicePairId: extractionContext.Pair.Id,
