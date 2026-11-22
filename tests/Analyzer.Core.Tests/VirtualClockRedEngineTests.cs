@@ -11,6 +11,7 @@ public class VirtualClockRedEngineTests
         var sessionId = Guid.NewGuid();
         var pairId = Guid.NewGuid();
         var engine = new VirtualClockRedEngine(timeoutThresholdMs: 2000);
+        Assert.Equal(2000, engine.TimeoutThresholdMs);
         var t0 = new DateTime(2026, 10, 26, 12, 0, 0, DateTimeKind.Utc);
 
         // 1. Register normal request with context and complete it 45.5 ms later
@@ -149,6 +150,7 @@ public class VirtualClockRedEngineTests
         var sessionId = Guid.NewGuid();
         var pairId = Guid.NewGuid();
         var engine = new VirtualClockRedEngine(timeoutThresholdMs: 2000);
+        Assert.Equal(2000, engine.TimeoutThresholdMs);
         var t0 = new DateTime(2026, 10, 26, 12, 0, 0, DateTimeKind.Utc);
 
         var traceId1 = DeterministicTraceIdGenerator.CreateTraceId(sessionId, pairId, 10, SpanCorrelationRole.Transaction);

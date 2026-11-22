@@ -30,6 +30,8 @@ public class VirtualClockRedEngine
         _timeoutThresholdMs = timeoutThresholdMs;
     }
 
+    public int TimeoutThresholdMs => _timeoutThresholdMs;
+
     public void RegisterRequest<TContext>(
         Guid sessionId,
         Guid devicePairId,

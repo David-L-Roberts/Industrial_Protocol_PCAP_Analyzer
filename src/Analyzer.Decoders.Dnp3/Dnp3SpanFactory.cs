@@ -151,7 +151,9 @@ internal static class Dnp3SpanFactory
         Dnp3SpanCorrelationIds ids,
         IReadOnlyList<Dnp3ObjectGroupId> objectGroups,
         IReadOnlyList<CapturedCommandEventRecord> commandEvents,
-        Dnp3TagChangeEventCollector? requestTagCollector)
+        Dnp3TagChangeEventCollector? requestTagCollector,
+        SpanId? parentSpanId = null,
+        bool? sboLinked = null)
     {
         string clientEndpoint = metadata.Pair.ResolveClientEndpoint();
         string serverEndpoint = metadata.Pair.ResolveServerEndpoint();
@@ -160,6 +162,11 @@ internal static class Dnp3SpanFactory
         attributes["pcap.request_frame"] = metadata.Frame.FrameNumber;
         attributes["pcap.request_bytes"] = metadata.Frame.RawApplicationPayload.Length;
         PopulateDnp3Attributes(attributes, metadata, objectGroups, commandEvents);
+
+        if (sboLinked.HasValue)
+        {
+            attributes["dnp3.sbo_linked"] = sboLinked.Value;
+        }
 
         if (requestTagCollector is { MatchedCount: > 0 })
         {
@@ -185,7 +192,7 @@ internal static class Dnp3SpanFactory
         return new PendingSpanContext(
             TraceId: ids.TraceId,
             SpanId: ids.SpanId,
-            ParentSpanId: null,
+            ParentSpanId: parentSpanId,
             ServiceName: serverEndpoint,
             OperationName: FormatOperationName((byte)metadata.FunctionCode),
             Protocol: ProtocolType.Dnp3,
@@ -473,6 +480,174 @@ internal static class Dnp3SpanFactory
             Events: events);
     }
 
+    public static TraceSpanRecord CreateConfirmSpan(
+        Dnp3FrameMetadata metadata,
+        PendingConfirmContext? pendingConfirm)
+    {
+        string clientEndpoint = metadata.Pair.ResolveClientEndpoint();
+        string serverEndpoint = metadata.Pair.ResolveServerEndpoint();
+
+        TraceId traceId;
+        SpanId spanId;
+        SpanId? parentSpanId;
+        DateTime startTimeUtc;
+        double durationMs;
+        long? responseFrameNumber;
+        SpanStatusCode statusCode;
+
+        var attributes = CreateBaseAttributes(metadata);
+        attributes["pcap.request_frame"] = metadata.Frame.FrameNumber;
+        attributes["pcap.request_bytes"] = metadata.Frame.RawApplicationPayload.Length;
+
+        var confirmFields = new Dictionary<string, object?>
+        {
+            ["frame_number"] = metadata.Frame.FrameNumber,
+            ["bytes"] = metadata.Frame.RawApplicationPayload.Length,
+            ["app_seq"] = metadata.AppControl?.Seq ?? 0
+        };
+
+        if (pendingConfirm is { } pending)
+        {
+            traceId = pending.TraceId;
+            spanId = DeterministicTraceIdGenerator.CreateSpanId(
+                metadata.Pair.SessionId,
+                metadata.Pair.Id,
+                metadata.Frame.FrameNumber,
+                SpanCorrelationRole.Confirm);
+            parentSpanId = pending.ParentSpanId;
+            startTimeUtc = pending.ResponseTimestampUtc;
+            durationMs = Math.Max(0.0, (metadata.Frame.TimestampUtc - pending.ResponseTimestampUtc).TotalMilliseconds);
+            responseFrameNumber = pending.ResponseFrameNumber;
+            statusCode = SpanStatusCode.Ok;
+            attributes["pcap.response_frame"] = pending.ResponseFrameNumber;
+            confirmFields["confirmed_frame"] = pending.ResponseFrameNumber;
+        }
+        else
+        {
+            var ids = Dnp3SpanCorrelationIds.Allocate(
+                metadata.Pair,
+                metadata.Frame.FrameNumber,
+                SpanCorrelationRole.Confirm);
+            traceId = ids.TraceId;
+            spanId = ids.SpanId;
+            parentSpanId = null;
+            startTimeUtc = metadata.Frame.TimestampUtc;
+            durationMs = 0.0;
+            responseFrameNumber = null;
+            statusCode = SpanStatusCode.Unset;
+            attributes["protocol.unpaired"] = true;
+        }
+
+        PopulateDnp3Attributes(attributes, metadata, [], []);
+
+        var events = new List<SpanEventRecord>(1)
+        {
+            new(
+                TimestampUtc: metadata.Frame.TimestampUtc,
+                Kind: SpanEventKind.ConfirmSent,
+                Name: string.Empty,
+                Fields: confirmFields)
+        };
+
+        return new TraceSpanRecord(
+            StartTimeUtc: startTimeUtc,
+            EndTimeUtc: metadata.Frame.TimestampUtc,
+            DurationMs: durationMs,
+            SessionId: metadata.Pair.SessionId,
+            DevicePairId: metadata.Pair.Id,
+            TraceId: traceId,
+            SpanId: spanId,
+            ParentSpanId: parentSpanId,
+            ServiceName: serverEndpoint,
+            OperationName: FormatOperationName((byte)Dnp3FunctionCode.Confirm),
+            SpanKind: SpanKind.Client,
+            OriginKind: SpanOriginKind.Confirm,
+            StatusCode: statusCode,
+            StatusMessage: null,
+            Protocol: ProtocolType.Dnp3,
+            ClientEndpoint: clientEndpoint,
+            ServerEndpoint: serverEndpoint,
+            Direction: TrafficDirection.ClientToServer,
+            RequestFrameNumber: metadata.Frame.FrameNumber,
+            ResponseFrameNumber: responseFrameNumber,
+            TransactionId: metadata.TransactionId,
+            FunctionCode: (short)Dnp3FunctionCode.Confirm,
+            Attributes: attributes,
+            Events: events);
+    }
+
+    public static TraceSpanRecord CreateConfirmTimeoutSpan(
+        PendingConfirmContext pending,
+        DateTime currentVirtualTime,
+        int timeoutThresholdMs,
+        bool isMidStreamTimeout)
+    {
+        DateTime startTimeUtc = pending.ResponseTimestampUtc;
+        double elapsedMs = (currentVirtualTime - startTimeUtc).TotalMilliseconds;
+        double durationMs = isMidStreamTimeout ? timeoutThresholdMs : Math.Max(0.0, elapsedMs);
+        DateTime endTimeUtc = isMidStreamTimeout
+            ? startTimeUtc.AddMilliseconds(timeoutThresholdMs)
+            : (currentVirtualTime >= startTimeUtc ? currentVirtualTime : startTimeUtc);
+
+        string transactionId = pending.AppSeq.ToString(CultureInfo.InvariantCulture);
+        SpanId spanId = DeterministicTraceIdGenerator.CreateSpanId(
+            pending.Endpoint.SessionId,
+            pending.Endpoint.DevicePairId,
+            pending.ResponseFrameNumber,
+            SpanCorrelationRole.ConfirmTimeout);
+
+        var attributes = CreateBaseAttributes(
+            pending.Endpoint,
+            (short)Dnp3FunctionCode.Confirm,
+            transactionId);
+        attributes["pcap.response_frame"] = pending.ResponseFrameNumber;
+        attributes["dnp3.src"] = (int)pending.Endpoint.ClientDnp3Address;
+        attributes["dnp3.dst"] = (int)pending.Endpoint.ServerDnp3Address;
+        attributes["dnp3.app_seq"] = pending.AppSeq;
+        attributes["dnp3.uns"] = pending.IsUnsolicited;
+
+        var events = new List<SpanEventRecord>(1)
+        {
+            new(
+                TimestampUtc: endTimeUtc,
+                Kind: SpanEventKind.ConfirmTimeoutExpired,
+                Name: string.Empty,
+                Fields: new Dictionary<string, object?>
+                {
+                    ["timeout_ms"] = durationMs,
+                    ["reason"] = SpanOriginKind.ConfirmTimeout,
+                    ["unconfirmed_frame"] = pending.ResponseFrameNumber,
+                    ["app_seq"] = pending.AppSeq
+                })
+        };
+
+        return new TraceSpanRecord(
+            StartTimeUtc: startTimeUtc,
+            EndTimeUtc: endTimeUtc,
+            DurationMs: durationMs,
+            SessionId: pending.Endpoint.SessionId,
+            DevicePairId: pending.Endpoint.DevicePairId,
+            TraceId: pending.TraceId,
+            SpanId: spanId,
+            ParentSpanId: pending.ParentSpanId,
+            ServiceName: pending.Endpoint.ServerEndpoint,
+            OperationName: FormatOperationName((byte)Dnp3FunctionCode.Confirm),
+            SpanKind: SpanKind.Client,
+            OriginKind: SpanOriginKind.ConfirmTimeout,
+            StatusCode: SpanStatusCode.Error,
+            StatusMessage: isMidStreamTimeout ? "CONFIRM_TIMEOUT" : "CONFIRM_TIMEOUT_AT_EOF",
+            Protocol: ProtocolType.Dnp3,
+            ClientEndpoint: pending.Endpoint.ClientEndpoint,
+            ServerEndpoint: pending.Endpoint.ServerEndpoint,
+            Direction: TrafficDirection.ClientToServer,
+            RequestFrameNumber: null,
+            ResponseFrameNumber: pending.ResponseFrameNumber,
+            TransactionId: transactionId,
+            FunctionCode: (short)Dnp3FunctionCode.Confirm,
+            Attributes: attributes,
+            Events: events);
+    }
+
     public static TraceSpanRecord CreateMalformedSpan(
         Dnp3FrameMetadata metadata,
         Dnp3SpanCorrelationIds ids)
@@ -522,28 +697,29 @@ internal static class Dnp3SpanFactory
             Events: []);
     }
 
-    private static Dictionary<string, object?> CreateBaseAttributes(Dnp3FrameMetadata metadata)
-    {
-        bool isClientToServer = metadata.Direction == TrafficDirection.ClientToServer;
-        string clientIp = (isClientToServer ? metadata.Frame.SourceIp : metadata.Frame.DestIp).ToString();
-        int clientPort = isClientToServer ? metadata.Frame.SourcePort : metadata.Frame.DestPort;
-        string serverIp = (isClientToServer ? metadata.Frame.DestIp : metadata.Frame.SourceIp).ToString();
-        int serverPort = isClientToServer ? metadata.Frame.DestPort : metadata.Frame.SourcePort;
+    private static Dictionary<string, object?> CreateBaseAttributes(Dnp3FrameMetadata metadata) =>
+        CreateBaseAttributes(
+            Dnp3EndpointSnapshot.FromMetadata(metadata),
+            metadata.FunctionCode,
+            metadata.TransactionId);
 
-        return new Dictionary<string, object?>
+    private static Dictionary<string, object?> CreateBaseAttributes(
+        Dnp3EndpointSnapshot endpoint,
+        short functionCode,
+        string transactionId) =>
+        new()
         {
             ["protocol"] = ProtocolType.Dnp3,
-            ["session.id"] = metadata.Pair.SessionId,
-            ["device_pair.id"] = metadata.Pair.Id,
-            ["device_pair.name"] = metadata.Pair.Name,
-            ["net.client.ip"] = clientIp,
-            ["net.client.port"] = clientPort,
-            ["net.server.ip"] = serverIp,
-            ["net.server.port"] = serverPort,
-            ["protocol.function_code"] = (int)metadata.FunctionCode,
-            ["protocol.transaction_id"] = metadata.TransactionId
+            ["session.id"] = endpoint.SessionId,
+            ["device_pair.id"] = endpoint.DevicePairId,
+            ["device_pair.name"] = endpoint.DevicePairName,
+            ["net.client.ip"] = endpoint.ClientIp,
+            ["net.client.port"] = endpoint.ClientPort,
+            ["net.server.ip"] = endpoint.ServerIp,
+            ["net.server.port"] = endpoint.ServerPort,
+            ["protocol.function_code"] = (int)functionCode,
+            ["protocol.transaction_id"] = transactionId
         };
-    }
 
     private static void PopulateDnp3Attributes(
         Dictionary<string, object?> attributes,

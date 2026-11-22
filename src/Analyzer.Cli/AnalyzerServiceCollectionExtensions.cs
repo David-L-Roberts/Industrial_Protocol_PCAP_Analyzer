@@ -49,7 +49,8 @@ public static class AnalyzerServiceCollectionExtensions
             var tagEngine = sp.GetService<TagResolutionEngine>();
             var session = sp.GetService<TestSession>();
             bool storeTraceSpans = session?.StoreTraceSpans ?? true;
-            return new Dnp3Decoder(redEngine, handlerRegistry, tagEngine, storeTraceSpans);
+            int sboWindowMs = session?.SboWindowMs ?? Dnp3Decoder.DefaultSboWindowMs;
+            return new Dnp3Decoder(redEngine, handlerRegistry, tagEngine, storeTraceSpans, sboWindowMs);
         });
 
         services.AddTransient<IProtocolDecoder>(sp => sp.GetRequiredService<ModbusTcpDecoder>());

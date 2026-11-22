@@ -28,6 +28,8 @@ public enum Dnp3FunctionCode : byte
 
 public class Dnp3Decoder : IProtocolDecoder
 {
+    public const int DefaultSboWindowMs = 10_000;
+
     private const byte StartByte1 = 0x05;
     private const byte StartByte2 = 0x64;
     private const int MinLinkHeaderBytes = 10;
@@ -35,25 +37,40 @@ public class Dnp3Decoder : IProtocolDecoder
 
     private readonly record struct Dnp3RequestContext(
         byte RequestFunctionCode,
-        Dnp3TagChangeEventCollector? RequestTagCollector);
+        Dnp3TagChangeEventCollector? RequestTagCollector,
+        IReadOnlyList<ProtocolAddress>? SelectTargetAddresses = null);
 
     private readonly VirtualClockRedEngine _redEngine;
     private readonly Dnp3HandlerRegistry _handlerRegistry;
     private readonly TagResolutionEngine? _tagEngine;
     private readonly bool _storeTraceSpans;
+    private readonly Dnp3SboTracker? _sboTracker;
+    private readonly Dnp3ConfirmTracker? _confirmTracker;
 
     public Dnp3Decoder(
         VirtualClockRedEngine redEngine,
         Dnp3HandlerRegistry handlerRegistry,
         TagResolutionEngine? tagEngine = null,
-        bool storeTraceSpans = true)
+        bool storeTraceSpans = true,
+        int sboWindowMs = DefaultSboWindowMs)
     {
         ArgumentNullException.ThrowIfNull(redEngine);
         ArgumentNullException.ThrowIfNull(handlerRegistry);
+        if (sboWindowMs <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(sboWindowMs), "SBO window must be positive.");
+        }
+
         _redEngine = redEngine;
         _handlerRegistry = handlerRegistry;
         _tagEngine = tagEngine;
         _storeTraceSpans = storeTraceSpans;
+
+        if (storeTraceSpans)
+        {
+            _sboTracker = new Dnp3SboTracker(sboWindowMs, redEngine.TimeoutThresholdMs);
+            _confirmTracker = new Dnp3ConfirmTracker(redEngine.TimeoutThresholdMs);
+        }
     }
 
     public ProtocolType Protocol => ProtocolType.Dnp3;
@@ -162,8 +179,26 @@ public class Dnp3Decoder : IProtocolDecoder
         return new ProtocolDecodeOutput(transactions, dataPoints, commandEvents, [], traceSpans);
     }
 
-    public TimeoutFlushOutput FlushExpiredTimeouts(DateTime currentVirtualTime, bool isEndOfFile) =>
-        _redEngine.FlushExpiredTimeouts(currentVirtualTime, isEndOfFile);
+    public TimeoutFlushOutput FlushExpiredTimeouts(DateTime currentVirtualTime, bool isEndOfFile)
+    {
+        var redFlushed = _redEngine.FlushExpiredTimeouts(currentVirtualTime, isEndOfFile);
+        if (!_storeTraceSpans)
+        {
+            return redFlushed;
+        }
+
+        _sboTracker?.PruneExpired(currentVirtualTime, isEndOfFile, redFlushed.TraceSpans);
+        var confirmTimeouts = _confirmTracker?.FlushExpired(currentVirtualTime, isEndOfFile);
+        if (confirmTimeouts is null or { Count: 0 })
+        {
+            return redFlushed;
+        }
+
+        var combinedSpans = new List<TraceSpanRecord>(redFlushed.TraceSpans.Count + confirmTimeouts.Count);
+        combinedSpans.AddRange(redFlushed.TraceSpans);
+        combinedSpans.AddRange(confirmTimeouts);
+        return new TimeoutFlushOutput(redFlushed.Transactions, combinedSpans);
+    }
 
     private void ProcessClientFrame(
         Dnp3FrameMetadata metadata,
@@ -174,7 +209,9 @@ public class Dnp3Decoder : IProtocolDecoder
         List<CapturedCommandEventRecord> commandEvents,
         List<TraceSpanRecord> traceSpans)
     {
-        if (functionCode == (byte)Dnp3FunctionCode.DirectOperateNoAck)
+        var dnp3Fc = (Dnp3FunctionCode)functionCode;
+
+        if (dnp3Fc == Dnp3FunctionCode.DirectOperateNoAck)
         {
             var objectGroups = new List<Dnp3ObjectGroupId>();
             ScanObjectSections(
@@ -203,8 +240,18 @@ public class Dnp3Decoder : IProtocolDecoder
             return;
         }
 
-        if (!IsResponseExpectedRequestFunction(functionCode))
+        if (dnp3Fc == Dnp3FunctionCode.Confirm)
         {
+            if (_storeTraceSpans && _confirmTracker is not null && metadata.AppControl is { } appControl)
+            {
+                _confirmTracker.TryConsume(
+                    metadata.Pair.Id,
+                    appControl.Seq,
+                    appControl.Uns,
+                    out var pendingConfirm);
+                traceSpans.Add(Dnp3SpanFactory.CreateConfirmSpan(metadata, pendingConfirm));
+            }
+
             return;
         }
 
@@ -221,13 +268,84 @@ public class Dnp3Decoder : IProtocolDecoder
 
         PendingSpanContext? spanContext = null;
         Dnp3TagChangeEventCollector? requestTagCollector = null;
+        IReadOnlyList<ProtocolAddress>? selectTargetAddresses = null;
 
         if (_storeTraceSpans)
         {
-            var role = functionCode == (byte)Dnp3FunctionCode.Select
-                ? SpanCorrelationRole.SboSelect
-                : SpanCorrelationRole.Transaction;
-            var ids = Dnp3SpanCorrelationIds.Allocate(metadata.Pair, metadata.Frame.FrameNumber, role);
+            Dnp3SpanCorrelationIds ids;
+            SpanId? parentSpanId = null;
+            bool? sboLinked = null;
+
+            if (dnp3Fc == Dnp3FunctionCode.Select)
+            {
+                ids = Dnp3SpanCorrelationIds.Allocate(metadata.Pair, metadata.Frame.FrameNumber, SpanCorrelationRole.SboSelect);
+                if (commandEvents.Count > 0)
+                {
+                    var distinctTargets = new List<ProtocolAddress>(commandEvents.Count);
+                    for (int i = 0; i < commandEvents.Count; i++)
+                    {
+                        var addr = commandEvents[i].TargetAddress;
+                        if (!distinctTargets.Contains(addr))
+                        {
+                            distinctTargets.Add(addr);
+                        }
+                    }
+
+                    selectTargetAddresses = distinctTargets;
+                    _sboTracker?.RegisterSelect(
+                        metadata.Pair.Id,
+                        distinctTargets,
+                        ids.TraceId,
+                        ids.SpanId,
+                        metadata.Frame.TimestampUtc);
+                }
+            }
+            else if (dnp3Fc == Dnp3FunctionCode.Operate)
+            {
+                bool linked = false;
+                TraceId linkedTraceId = default;
+                SpanId linkedParentSpanId = default;
+
+                if (_sboTracker is not null)
+                {
+                    for (int i = 0; i < commandEvents.Count; i++)
+                    {
+                        if (_sboTracker.TryConsumeForOperate(
+                            metadata.Pair.Id,
+                            commandEvents[i].TargetAddress,
+                            metadata.Frame.TimestampUtc,
+                            out linkedTraceId,
+                            out linkedParentSpanId))
+                        {
+                            linked = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (linked)
+                {
+                    ids = new Dnp3SpanCorrelationIds(
+                        linkedTraceId,
+                        DeterministicTraceIdGenerator.CreateSpanId(
+                            metadata.Pair.SessionId,
+                            metadata.Pair.Id,
+                            metadata.Frame.FrameNumber,
+                            SpanCorrelationRole.SboOperate));
+                    parentSpanId = linkedParentSpanId;
+                    sboLinked = true;
+                }
+                else
+                {
+                    ids = Dnp3SpanCorrelationIds.Allocate(metadata.Pair, metadata.Frame.FrameNumber, SpanCorrelationRole.Transaction);
+                    sboLinked = false;
+                }
+            }
+            else
+            {
+                ids = Dnp3SpanCorrelationIds.Allocate(metadata.Pair, metadata.Frame.FrameNumber, SpanCorrelationRole.Transaction);
+            }
+
             StampCorrelationIds(dataPoints, commandEvents, ids.TraceId, ids.SpanId);
 
             if (dataPoints.Count > 0)
@@ -240,10 +358,12 @@ public class Dnp3Decoder : IProtocolDecoder
                 ids,
                 requestObjectGroups,
                 commandEvents,
-                requestTagCollector);
+                requestTagCollector,
+                parentSpanId,
+                sboLinked);
         }
 
-        var reqContext = new Dnp3RequestContext(functionCode, requestTagCollector);
+        var reqContext = new Dnp3RequestContext(functionCode, requestTagCollector, selectTargetAddresses);
         _redEngine.RegisterRequest(
             sessionId: metadata.Pair.SessionId,
             devicePairId: metadata.Pair.Id,
@@ -300,6 +420,17 @@ public class Dnp3Decoder : IProtocolDecoder
 
             if (_storeTraceSpans && spanContext is not null)
             {
+                if (reqContext.RequestFunctionCode == (byte)Dnp3FunctionCode.Select &&
+                    reqContext.SelectTargetAddresses is { Count: > 0 })
+                {
+                    _sboTracker?.OnSelectResponse(
+                        metadata.Pair.Id,
+                        reqContext.SelectTargetAddresses,
+                        spanContext.SpanId,
+                        metadata.Frame.TimestampUtc,
+                        isException);
+                }
+
                 StampCorrelationIds(dataPoints, commandEvents, spanContext.TraceId, spanContext.SpanId);
                 var responseTagCollector = CollectTagChanges(dataPoints);
                 traceSpans.Add(Dnp3SpanFactory.CreateResponseSpan(
@@ -313,6 +444,11 @@ public class Dnp3Decoder : IProtocolDecoder
                     responseCommands: commandEvents,
                     requestTagCollector: reqContext.RequestTagCollector,
                     responseTagCollector: responseTagCollector));
+
+                if (appControl.Con)
+                {
+                    RegisterPendingConfirm(metadata, appControl, spanContext.TraceId, spanContext.SpanId, isUnsolicited: false);
+                }
             }
 
             return;
@@ -333,6 +469,34 @@ public class Dnp3Decoder : IProtocolDecoder
             ? Dnp3SpanFactory.CreateUnsolicitedSpan(metadata, ids, iinStatus, responseObjectGroups, commandEvents, tagCollector)
             : Dnp3SpanFactory.CreateOrphanResponseSpan(metadata, ids, iinStatus, responseObjectGroups, commandEvents, tagCollector);
         traceSpans.Add(span);
+
+        if (appControl.Con &&
+            (functionCode == (byte)Dnp3FunctionCode.Response || isUnsolicited))
+        {
+            RegisterPendingConfirm(metadata, appControl, ids.TraceId, ids.SpanId, isUnsolicited);
+        }
+    }
+
+    private void RegisterPendingConfirm(
+        Dnp3FrameMetadata metadata,
+        Dnp3AppControl appControl,
+        TraceId traceId,
+        SpanId parentSpanId,
+        bool isUnsolicited)
+    {
+        if (_confirmTracker is null ||
+            !metadata.SourceAddress.HasValue ||
+            !metadata.DestinationAddress.HasValue)
+        {
+            return;
+        }
+
+        _confirmTracker?.Register(PendingConfirmContext.FromMetadata(
+            metadata,
+            appControl,
+            traceId,
+            parentSpanId,
+            isUnsolicited));
     }
 
     private void ScanObjectSections(
@@ -408,9 +572,6 @@ public class Dnp3Decoder : IProtocolDecoder
             commandEvents[i] = commandEvents[i] with { TraceId = traceId, SpanId = spanId };
         }
     }
-
-    private static bool IsResponseExpectedRequestFunction(byte functionCode) =>
-        functionCode is not ((byte)Dnp3FunctionCode.Confirm or (byte)Dnp3FunctionCode.DirectOperateNoAck);
 
     private static bool IsPayloadBearingClientFunction(byte functionCode) =>
         functionCode is (byte)Dnp3FunctionCode.Write

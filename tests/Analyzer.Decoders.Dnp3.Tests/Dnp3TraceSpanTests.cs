@@ -635,7 +635,10 @@ public class Dnp3TraceSpanTests
 
         var eofFlush = decoder.FlushExpiredTimeouts(BaseTime.AddSeconds(30), isEndOfFile: true);
         Assert.Empty(eofFlush.Transactions);
-        Assert.Empty(eofFlush.TraceSpans);
+        var confirmTimeout = Assert.Single(eofFlush.TraceSpans);
+        Assert.Equal(SpanOriginKind.ConfirmTimeout, confirmTimeout.OriginKind);
+        Assert.Equal(span.TraceId, confirmTimeout.TraceId);
+        Assert.Equal(span.SpanId, confirmTimeout.ParentSpanId);
     }
 
     [Fact]

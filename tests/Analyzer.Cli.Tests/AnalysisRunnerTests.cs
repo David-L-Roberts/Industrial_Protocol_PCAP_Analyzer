@@ -329,6 +329,89 @@ public class AnalysisRunnerTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(500, true)]
+    [InlineData(100, false)]
+    public async Task RunAnalysisAsync_Dnp3SboWindowFromManifest_ControlsOperateParentLinking(
+        int sboWindowMs,
+        bool expectedLinked)
+    {
+        string pcapPath = Path.Combine(_tempDir, $"dnp3_sbo_{sboWindowMs}.pcap");
+        await File.WriteAllBytesAsync(pcapPath, [0x01, 0x02]);
+
+        string manifestPath = Path.Combine(_tempDir, $"dnp3_sbo_manifest_{sboWindowMs}.json");
+        var manifestObj = new
+        {
+            session_name = $"SAT_Dnp3_SBO_{sboWindowMs}",
+            pcap_file = Path.GetFileName(pcapPath),
+            timeout_threshold_ms = 2000,
+            sbo_window_ms = sboWindowMs,
+            store_trace_spans = true,
+            device_pairs = new[]
+            {
+                new
+                {
+                    name = "Master_to_RTU",
+                    protocol = "DNP3",
+                    client_ip = "10.0.1.5",
+                    server_ip = "10.0.1.10",
+                    client_protocol_address_id = (int?)4,
+                    server_protocol_address_id = (int?)3
+                }
+            }
+        };
+        await File.WriteAllTextAsync(manifestPath, JsonSerializer.Serialize(manifestObj));
+
+        var clientIp = IPAddress.Parse("10.0.1.5");
+        var serverIp = IPAddress.Parse("10.0.1.10");
+        var t0 = new DateTime(2026, 11, 22, 10, 0, 0, DateTimeKind.Utc);
+
+        byte[] selectReq = [0xC1, 0x03, 12, 1, 0x17, 0x01, 0x01, 0x03, 0x01, 0x64, 0x00, 0x00, 0x00, 0x64, 0x00, 0x00, 0x00, 0x00];
+        byte[] selectResp = [0xC1, 0x81, 0x00, 0x00, 12, 1, 0x17, 0x01, 0x01, 0x03, 0x01, 0x64, 0x00, 0x00, 0x00, 0x64, 0x00, 0x00, 0x00, 0x00];
+        byte[] operateReq = [0xC2, 0x04, 12, 1, 0x17, 0x01, 0x01, 0x03, 0x01, 0x64, 0x00, 0x00, 0x00, 0x64, 0x00, 0x00, 0x00, 0x00];
+        byte[] operateResp = [0xC2, 0x81, 0x00, 0x00, 12, 1, 0x17, 0x01, 0x01, 0x03, 0x01, 0x64, 0x00, 0x00, 0x00, 0x64, 0x00, 0x00, 0x00, 0x00];
+
+        var frames = new List<DissectedFrame>
+        {
+            new(1, t0, clientIp, 50100, serverIp, 20000, ProtocolType.Dnp3, BuildDnp3LinkFrame(3, 4, selectReq)),
+            new(2, t0.AddMilliseconds(10), serverIp, 20000, clientIp, 50100, ProtocolType.Dnp3, BuildDnp3LinkFrame(4, 3, selectResp)),
+            // Operate arrives 200ms after Select response (within 500ms, outside 100ms)
+            new(3, t0.AddMilliseconds(210), clientIp, 50100, serverIp, 20000, ProtocolType.Dnp3, BuildDnp3LinkFrame(3, 4, operateReq)),
+            new(4, t0.AddMilliseconds(220), serverIp, 20000, clientIp, 50100, ProtocolType.Dnp3, BuildDnp3LinkFrame(4, 3, operateResp))
+        };
+
+        var fakeSink = new FakeDataSink();
+        var infraFactory = new FakeInfraFactory(fakeSink, new FakeFrameSource(frames), null);
+
+        var services = new ServiceCollection();
+        services.AddAnalyzerCoreServices();
+        services.AddSingleton<IAnalysisInfrastructureFactory>(infraFactory);
+        var sp = services.BuildServiceProvider();
+
+        var runner = sp.GetRequiredService<IAnalysisRunner>();
+        await runner.RunAnalysisAsync(new AnalysisOptions(manifestPath, "Host=localhost;Database=test"));
+
+        Assert.Equal(sboWindowMs, fakeSink.InitializedSession!.SboWindowMs);
+        Assert.Equal(2, fakeSink.TraceSpans.Count);
+
+        var selectSpan = fakeSink.TraceSpans[0];
+        var operateSpan = fakeSink.TraceSpans[1];
+        Assert.Equal("DNP3 FC03 Select", selectSpan.OperationName);
+        Assert.Equal("DNP3 FC04 Operate", operateSpan.OperationName);
+        Assert.Equal(expectedLinked, operateSpan.Attributes["dnp3.sbo_linked"]);
+
+        if (expectedLinked)
+        {
+            Assert.Equal(selectSpan.TraceId, operateSpan.TraceId);
+            Assert.Equal(selectSpan.SpanId, operateSpan.ParentSpanId);
+        }
+        else
+        {
+            Assert.NotEqual(selectSpan.TraceId, operateSpan.TraceId);
+            Assert.Null(operateSpan.ParentSpanId);
+        }
+    }
+
     private static byte[] BuildDnp3LinkFrame(ushort dst, ushort src, ReadOnlySpan<byte> appFragment)
     {
         int userDataLen = 1 + appFragment.Length;

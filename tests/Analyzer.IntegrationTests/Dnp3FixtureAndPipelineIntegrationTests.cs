@@ -375,10 +375,10 @@ public class Dnp3FixtureAndPipelineIntegrationTests : IAsyncLifetime
         }
 
         // Verify persisted trace_spans and cross-table trace/span correlation
-        var spansByRequestFrame = new Dictionary<long, (string TraceId, string SpanId)>();
+        var spansByRequestFrame = new Dictionary<long, (string TraceId, string SpanId, string? ParentSpanId, string? SboLinked)>();
         await using (var spansCmd = new NpgsqlCommand(
             """
-            SELECT request_frame_number, trace_id, span_id, duration_ms, protocol, origin_kind, status_code, status_message, service_name, client_endpoint, server_endpoint, operation_name, function_code, transaction_id
+            SELECT request_frame_number, trace_id, span_id, parent_span_id, attributes->>'dnp3.sbo_linked', duration_ms, protocol, origin_kind, status_code, status_message, service_name, client_endpoint, server_endpoint, operation_name, function_code, transaction_id
             FROM trace_spans
             WHERE session_id = @id
             ORDER BY request_frame_number ASC;
@@ -387,7 +387,7 @@ public class Dnp3FixtureAndPipelineIntegrationTests : IAsyncLifetime
         {
             spansCmd.Parameters.AddWithValue("id", summary.SessionId);
             await using var reader = await spansCmd.ExecuteReaderAsync();
-            var spans = new List<(long RequestFrame, string TraceId, string SpanId, double DurationMs, string Protocol, string OriginKind, string StatusCode, string StatusMessage, string ServiceName, string ClientEndpoint, string ServerEndpoint, string OperationName, short FunctionCode, string TransactionId)>();
+            var spans = new List<(long RequestFrame, string TraceId, string SpanId, string? ParentSpanId, string? SboLinked, double DurationMs, string Protocol, string OriginKind, string StatusCode, string StatusMessage, string ServiceName, string ClientEndpoint, string ServerEndpoint, string OperationName, short FunctionCode, string TransactionId)>();
             while (await reader.ReadAsync())
             {
                 string traceId = reader.GetString(1);
@@ -399,17 +399,19 @@ public class Dnp3FixtureAndPipelineIntegrationTests : IAsyncLifetime
                     reader.GetInt64(0),
                     traceId,
                     spanId,
-                    reader.GetDouble(3),
-                    reader.GetString(4),
-                    reader.GetString(5),
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.GetDouble(5),
                     reader.GetString(6),
                     reader.GetString(7),
                     reader.GetString(8),
                     reader.GetString(9),
                     reader.GetString(10),
                     reader.GetString(11),
-                    reader.GetInt16(12),
-                    reader.GetString(13)));
+                    reader.GetString(12),
+                    reader.GetString(13),
+                    reader.GetInt16(14),
+                    reader.GetString(15)));
             }
 
             Assert.Equal(2, spans.Count);
@@ -426,11 +428,14 @@ public class Dnp3FixtureAndPipelineIntegrationTests : IAsyncLifetime
             });
 
             Assert.Equal((16L, "DNP3 FC04 Operate", (short)4, "2"), (spans[0].RequestFrame, spans[0].OperationName, spans[0].FunctionCode, spans[0].TransactionId));
+            Assert.Equal("true", spans[0].SboLinked);
             Assert.Equal((24L, "DNP3 FC01 Read", (short)1, "1"), (spans[1].RequestFrame, spans[1].OperationName, spans[1].FunctionCode, spans[1].TransactionId));
+            Assert.Null(spans[1].ParentSpanId);
+            Assert.Null(spans[1].SboLinked);
 
             foreach (var s in spans)
             {
-                spansByRequestFrame[s.RequestFrame] = (s.TraceId, s.SpanId);
+                spansByRequestFrame[s.RequestFrame] = (s.TraceId, s.SpanId, s.ParentSpanId, s.SboLinked);
             }
         }
 
@@ -456,9 +461,11 @@ public class Dnp3FixtureAndPipelineIntegrationTests : IAsyncLifetime
 
         Assert.Equal(2, cmdIdsByFrame.Count);
         Assert.Equal(2, dpIdsByFrame.Count);
-        Assert.Equal(spansByRequestFrame[16L], cmdIdsByFrame[16L]);
-        Assert.Equal(spansByRequestFrame[16L], dpIdsByFrame[16L]);
+        Assert.Equal((spansByRequestFrame[16L].TraceId, spansByRequestFrame[16L].SpanId), cmdIdsByFrame[16L]);
+        Assert.Equal((spansByRequestFrame[16L].TraceId, spansByRequestFrame[16L].SpanId), dpIdsByFrame[16L]);
         Assert.Equal(cmdIdsByFrame[12L], dpIdsByFrame[12L]);
+        Assert.Equal(cmdIdsByFrame[12L].TraceId, spansByRequestFrame[16L].TraceId);
+        Assert.Equal(cmdIdsByFrame[12L].SpanId, spansByRequestFrame[16L].ParentSpanId);
 
         if (!_config.KeepTestData)
         {
